@@ -411,7 +411,8 @@
     "disc": "npm run transpile && npm run build:esm && cross-env NODE_ENV=disc webpack --config ./config/webpack.config.js",
     "preversion": "npm run lint && npm run test",
     "dev": "watch 'npm run test:node:memory' src/ test/",
-    "dev:example": "watch 'npm run transpile:src && echo \"done\"' src/ test/"
+    "dev:example": "watch 'npm run transpile:src && echo \"done\"' src/ test/",
+    "watch:transpile": "nodemon --watch src/ --ext ts --ignore 'src/plugins/*' --exec npm run transpile"
   },
   "pre-commit": [
     "lint"
@@ -540,6 +541,7 @@
     "mocha.parallel": "0.15.6",
     "nconf": "0.12.1",
     "node-pre-gyp": "0.17.0",
+    "nodemon": "3.0.1",
     "pre-commit": "1.2.2",
     "process": "0.11.10",
     "querystring-es3": "0.2.1",
