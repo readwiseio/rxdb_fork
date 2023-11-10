@@ -1,10 +1,6 @@
-
-// Temporarily moved to the top since other tests are failing:
-import './unit/rx-query.test.ts';
-
-
 import './unit/init.test.ts';
 import './unit/util.test.ts';
+
 
 /**
  * Helpers that
@@ -40,6 +36,7 @@ import './unit/rx-collection.test.ts';
 import './unit/rx-document.test.ts';
 import './unit/validate.test.ts';
 import './unit/encryption.test.ts';
+import './unit/rx-query.test.ts';
 import './unit/cross-instance.test.ts';
 import './unit/local-documents.test.ts';
 import './unit/change-event-buffer.test.ts';
