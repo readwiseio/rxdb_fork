@@ -121,15 +121,15 @@ function getCachedRxDocumentMonad(docCache) {
     var ret = new Array(docsData.length);
     var registryTasks = [];
     for (var index = 0; index < docsData.length; index++) {
-      var docData = docsData[index];
-      var docId = docData[primaryPath];
-      var revisionHeight = (0, _index2.getHeightOfRevision)(docData._rev);
+      var _docData = docsData[index];
+      var docId = _docData[primaryPath];
+      var revisionHeight = (0, _index2.getHeightOfRevision)(_docData._rev);
       var byRev = void 0;
       var cachedRxDocumentWeakRef = void 0;
       var cacheItem = cacheItemByDocId.get(docId);
       if (!cacheItem) {
         byRev = new Map();
-        cacheItem = [byRev, docData];
+        cacheItem = [byRev, _docData];
         cacheItemByDocId.set(docId, cacheItem);
       } else {
         byRev = cacheItem[0];
@@ -137,8 +137,8 @@ function getCachedRxDocumentMonad(docCache) {
       }
       var cachedRxDocument = cachedRxDocumentWeakRef ? cachedRxDocumentWeakRef.deref() : undefined;
       if (!cachedRxDocument) {
-        docData = deepFreezeWhenDevMode(docData);
-        cachedRxDocument = documentCreator(docData);
+        _docData = deepFreezeWhenDevMode(_docData);
+        cachedRxDocument = documentCreator(_docData);
         byRev.set(revisionHeight, createWeakRefWithFallback(cachedRxDocument));
         if (registry) {
           registryTasks.push(cachedRxDocument);
