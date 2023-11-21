@@ -403,7 +403,8 @@
     "disc": "npm run transpile && npm run build:es && cross-env NODE_ENV=disc webpack --config ./config/webpack.config.js",
     "preversion": "npm run lint && npm run test",
     "dev": "watch 'npm run test:node:memory' src/ test/",
-    "dev:example": "watch 'npm run transpile:src && echo \"done\"' src/ test/"
+    "dev:example": "watch 'npm run transpile:src && echo \"done\"' src/ test/",
+    "watch:transpile": "nodemon --watch src/ --ext ts --ignore 'src/plugins/*' --exec npm run transpile"
   },
   "pre-commit": [
     "lint"
@@ -452,7 +453,6 @@
     "z-schema": "6.0.1"
   },
   "devDependencies": {
-    "@types/node": "18.17.17",
     "@babel/cli": "7.22.15",
     "@babel/core": "7.22.20",
     "@babel/plugin-external-helpers": "7.22.5",
@@ -478,6 +478,7 @@
     "@types/cors": "2.8.14",
     "@types/crypto-js": "4.1.2",
     "@types/mocha": "10.0.1",
+    "@types/node": "18.17.17",
     "@types/pako": "2.0.0",
     "@types/request": "2.48.8",
     "@types/request-promise-native": "1.0.18",
@@ -534,6 +535,7 @@
     "mocha.parallel": "0.15.6",
     "nconf": "0.12.0",
     "node-pre-gyp": "0.17.0",
+    "nodemon": "3.0.1",
     "pouchdb": "8.0.1",
     "pre-commit": "1.2.2",
     "random-int": "3.0.0",
