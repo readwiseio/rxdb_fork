@@ -47,6 +47,8 @@ import { calculateNewResults } from './event-reduce';
 import { triggerCacheReplacement } from './query-cache';
 import { getQueryMatcher, normalizeMangoQuery } from './rx-query-helper';
 
+import * as localforage from 'localforage';
+
 let _queryCount = 0;
 const newQueryID = function (): number {
     return ++_queryCount;
@@ -76,6 +78,9 @@ export class RxQueryBase<
 
     public isFindOneByIdQuery: false | string | string[];
 
+    public persistedDocIds: null | string[] = null;
+    public checkedForPersistedResults: Promise<void>;
+    private _confirmCheckedForPersistedResults: () => void;
 
     /**
      * Contains the current result state
@@ -112,6 +117,11 @@ export class RxQueryBase<
             this.collection.schema.primaryPath as string,
             mangoQuery
         );
+
+        this.checkedForPersistedResults = new Promise((resolve) => {
+            this._confirmCheckedForPersistedResults = resolve;
+        });
+        this.loadPersistedResultsIfTheyExist();
     }
     get $(): BehaviorSubject<RxQueryResult> {
         if (!this._$) {
@@ -249,6 +259,14 @@ export class RxQueryBase<
             docs,
             time: now()
         };
+        if (this.shouldPersistQueryResults() && JSON.stringify(Array.from(docsMap.keys())) !== JSON.stringify(this.persistedDocIds)) {
+            // TODO: do we need to sort these or something to guarantee they're consistent?
+          this.persistedDocIds = Array.from(docsMap.keys());
+          console.time('Query cache: PERSISTING RESULTS OF ' + this.toString() + " " + this.persistedDocIds);
+          localforage.setItem(this.persistedQueryKey(), JSON.stringify(this.persistedDocIds)).then(() => {
+              console.timeEnd('Query cache: PERSISTING RESULTS OF ' + this.toString() + " " + this.persistedDocIds);
+          });
+        }
     }
 
     /**
@@ -490,6 +508,28 @@ export class RxQueryBase<
         this._limitBufferSize = bufferSize;
         return this;
     }
+
+    shouldPersistQueryResults() {
+      // TODO: make this work via a param passed to the query
+      return this.toString().includes('{"op":"find"') && this.collection.name === 'documents' && !this.toString().includes('parsed_doc_id');
+    }
+    persistedQueryKey() {
+      return `queryResult-${this.toString().replaceAll('"', '%')}`;
+    }
+    async loadPersistedResultsIfTheyExist() {
+      if (this.shouldPersistQueryResults()) {
+        console.time('Query cache: FETCHING RESULTS OF ' + this.toString());
+        const persistedResults = await localforage.getItem(this.persistedQueryKey()) as string;
+        if (persistedResults) {
+          this.persistedDocIds = JSON.parse(persistedResults);
+        } else {
+            console.log('Query cache: persisted results not found: ' + this.toString())
+        }
+        console.timeEnd('Query cache: FETCHING RESULTS OF ' + this.toString());
+      }
+      // Resolve the promise so that we can execute any queries potentially depending on persisted ids
+      this._confirmCheckedForPersistedResults();
+    }
 }
 
 export function _getDefaultQuery<RxDocType>(): MangoQuery<RxDocType> {
@@ -703,6 +743,8 @@ export async function queryCollection<RxDocType>(
     let docs: RxDocumentData<RxDocType>[] = [];
     const collection = rxQuery.collection;
 
+    await rxQuery.checkedForPersistedResults;
+
     /**
      * Optimizations shortcut.
      * If query is find-one-document-by-id,
@@ -711,6 +753,7 @@ export async function queryCollection<RxDocType>(
      */
     if (rxQuery.isFindOneByIdQuery) {
         if (Array.isArray(rxQuery.isFindOneByIdQuery)) {
+            await _queryCollectionByIds(rxQuery, docs, rxQuery.isFindOneByIdQuery);
             let docIds = rxQuery.isFindOneByIdQuery;
             docIds = docIds.filter(docId => {
                 // first try to fill from docCache
@@ -747,6 +790,8 @@ export async function queryCollection<RxDocType>(
                 docs.push(docData);
             }
         }
+    } else if (rxQuery.persistedDocIds !== null) {
+        await _queryCollectionByIds(rxQuery, docs, rxQuery.persistedDocIds);
     } else {
         const preparedQuery = rxQuery.getPreparedQuery();
         const queryResult = await collection.storageInstance.query(preparedQuery);
@@ -758,7 +803,30 @@ export async function queryCollection<RxDocType>(
         docs = queryResult.documents;
     }
     return docs;
+}
 
+// Refactored out of `queryCollection`: modifies the docResults array to fill it with data
+async function _queryCollectionByIds<RxDocType>(rxQuery: RxQuery<RxDocType> | RxQueryBase<RxDocType>, docResults: RxDocumentData<RxDocType>[], docIds: string[]) {
+    const collection = rxQuery.collection;
+    docIds = docIds.filter(docId => {
+        // first try to fill from docCache
+        const docData = rxQuery.collection._docCache.getLatestDocumentDataIfExists(docId);
+        if (docData) {
+            if (!docData._deleted) {
+                docResults.push(docData);
+            }
+            return false;
+        } else {
+            return true;
+        }
+    });
+    // otherwise get from storage
+    if (docIds.length > 0) {
+        const docsMap = await collection.storageInstance.findDocumentsById(docIds, false);
+        Object.values(docsMap).forEach(docData => {
+            docResults.push(docData);
+        });
+    }
 }
 
 /**
