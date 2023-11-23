@@ -26,7 +26,6 @@ import {
     wasSortedBeforeFirst,
     isSortedBeforeFirst,
     sortParamsChanged,
-    stateResolveFunctionByIndex,
 } from 'event-reduce-js';
 import type {
     RxQuery,
@@ -219,14 +218,6 @@ export function calculateNewResults<RxDocumentType>(
 
         const actionName: ActionName = calculateActionName(stateResolveFunctionInput);
 
-        const queryString = JSON.stringify(rxQuery.mangoQuery)
-        if (!queryString.includes('sentToServer') && !queryString.includes('"limit":1') && !queryString.includes('"id":{"$in"')) {
-            console.log(`------------/\n Query: ${JSON.stringify(rxQuery.mangoQuery)}, changeEvent: ${JSON.stringify(eventReduceEvent)}, queryParams: ${JSON.stringify(stateResolveFunctionInput)}`);
-            for (const i of Object.keys(stateResolveFunctionByIndex)) {
-                console.log(stateResolveFunctionByIndex[parseInt(i)].name, stateResolveFunctionByIndex[parseInt(i)](stateResolveFunctionInput));
-            }
-            console.log(`ACTION: ${actionName}`)
-        }
         if (actionName === 'runFullQueryAgain') {
             if (canFillResultSetFromLimitBuffer(stateResolveFunctionInput) && rxQuery._limitBufferResults !== null && rxQuery._limitBufferResults.length > 0) {
                 // replace the missing item with an item from our limit buffer!
