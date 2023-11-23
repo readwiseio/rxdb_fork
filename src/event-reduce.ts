@@ -165,7 +165,7 @@ function canFillResultSetFromLimitBuffer<RxDocumentType>(s: StateResolveFunction
 }
 
 function isBrokenSortedLimitCase<RxDocumentType>(s: StateResolveFunctionInput<RxDocumentType>) {
-    // The issue is specifically with limited, sorted lists having updated items moved to the top.
+    // The issue is specifically with limited, sorted lists having updated items moved to the top. See RW-33967.
     return (
         !isInsert(s) &&
         isUpdate(s) &&
@@ -173,6 +173,31 @@ function isBrokenSortedLimitCase<RxDocumentType>(s: StateResolveFunctionInput<Rx
         hasLimit(s) &&
         !isFindOne(s) &&
         !hasSkip(s) &&
+        !wasResultsEmpty(s) &&
+        !previousUnknown(s) &&
+        // wasLimitReached(s) && // both of these was LimitReachedCases are bork.
+        !wasFirst(s) &&
+        !wasLast(s) &&
+        sortParamsChanged(s) &&
+        !wasInResult(s) &&
+        !wasSortedBeforeFirst(s) &&
+        wasSortedAfterLast(s) &&
+        isSortedBeforeFirst(s) &&
+        !isSortedAfterLast(s) &&
+        !wasMatching(s) &&
+        doesMatchNow(s)
+    );
+}
+
+function isBrokenSortedLimitCaseWithSkip<RxDocumentType>(s: StateResolveFunctionInput<RxDocumentType>) {
+    // The issue is specifically with limited, sorted lists having updated items moved to the top. See RW-33967.
+    return (
+        !isInsert(s) &&
+        isUpdate(s) &&
+        !isDelete(s) &&
+        hasLimit(s) &&
+        !isFindOne(s) &&
+        hasSkip(s) &&
         !wasResultsEmpty(s) &&
         !previousUnknown(s) &&
         // wasLimitReached(s) && // both of these was LimitReachedCases are bork.
@@ -263,6 +288,9 @@ export function calculateNewResults<RxDocumentType>(
                 previousResultsMap,
             );
             return false;
+        } else if (actionName === 'doNothing' && isBrokenSortedLimitCaseWithSkip(stateResolveFunctionInput)) {
+            // We have to do a full re-exec of the query in this case with the skip:
+            return true;
         } else if (actionName !== 'doNothing') {
             changed = true;
             runAction(
