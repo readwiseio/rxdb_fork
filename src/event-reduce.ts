@@ -19,7 +19,14 @@ import {
     previousUnknown,
     wasLimitReached,
     wasMatching,
-    doesMatchNow
+    doesMatchNow,
+    wasFirst,
+    wasLast,
+    isSortedAfterLast,
+    wasSortedBeforeFirst,
+    isSortedBeforeFirst,
+    sortParamsChanged,
+    stateResolveFunctionByIndex,
 } from 'event-reduce-js';
 import type {
     RxQuery,
@@ -158,6 +165,31 @@ function canFillResultSetFromLimitBuffer<RxDocumentType>(s: StateResolveFunction
     );
 }
 
+function isBrokenSortedLimitCase<RxDocumentType>(s: StateResolveFunctionInput<RxDocumentType>) {
+    // The issue is specifically with limited, sorted lists having updated items moved to the top.
+    return (
+        !isInsert(s) &&
+        isUpdate(s) &&
+        !isDelete(s) &&
+        hasLimit(s) &&
+        !isFindOne(s) &&
+        !hasSkip(s) &&
+        !wasResultsEmpty(s) &&
+        !previousUnknown(s) &&
+        // wasLimitReached(s) && // both of these was LimitReachedCases are bork.
+        !wasFirst(s) &&
+        !wasLast(s) &&
+        sortParamsChanged(s) &&
+        !wasInResult(s) &&
+        !wasSortedBeforeFirst(s) &&
+        wasSortedAfterLast(s) &&
+        isSortedBeforeFirst(s) &&
+        !isSortedAfterLast(s) &&
+        !wasMatching(s) &&
+        doesMatchNow(s)
+    );
+}
+
 
 
 export function calculateNewResults<RxDocumentType>(
@@ -186,6 +218,15 @@ export function calculateNewResults<RxDocumentType>(
         };
 
         const actionName: ActionName = calculateActionName(stateResolveFunctionInput);
+
+        const queryString = JSON.stringify(rxQuery.mangoQuery)
+        if (!queryString.includes('sentToServer') && !queryString.includes('"limit":1') && !queryString.includes('"id":{"$in"')) {
+            console.log(`------------/\n Query: ${JSON.stringify(rxQuery.mangoQuery)}, changeEvent: ${JSON.stringify(eventReduceEvent)}, queryParams: ${JSON.stringify(stateResolveFunctionInput)}`);
+            for (const i of Object.keys(stateResolveFunctionByIndex)) {
+                console.log(stateResolveFunctionByIndex[parseInt(i)].name, stateResolveFunctionByIndex[parseInt(i)](stateResolveFunctionInput));
+            }
+            console.log(`ACTION: ${actionName}`)
+        }
         if (actionName === 'runFullQueryAgain') {
             if (canFillResultSetFromLimitBuffer(stateResolveFunctionInput) && rxQuery._limitBufferResults !== null && rxQuery._limitBufferResults.length > 0) {
                 // replace the missing item with an item from our limit buffer!
@@ -211,6 +252,26 @@ export function calculateNewResults<RxDocumentType>(
                 return false;
             }
             return true;
+        } else if (actionName === 'doNothing' && isBrokenSortedLimitCase(stateResolveFunctionInput)) {
+            changed = true;
+            runAction(
+                'removeLastInsertFirst',
+                queryParams,
+                eventReduceEvent,
+                previousResults,
+                previousResultsMap,
+            );
+            return false;
+        } else if (actionName === 'insertLast' && isBrokenSortedLimitCase(stateResolveFunctionInput)) {
+            changed = true;
+            runAction(
+                'insertFirst',
+                queryParams,
+                eventReduceEvent,
+                previousResults,
+                previousResultsMap,
+            );
+            return false;
         } else if (actionName !== 'doNothing') {
             changed = true;
             runAction(
