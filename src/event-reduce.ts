@@ -43,6 +43,7 @@ export type EventReduceResultPos<RxDocumentType> = {
     runFullQueryAgain: false;
     changed: boolean;
     newResults: RxDocumentType[];
+    limitResultsRemoved: boolean;
 };
 export type EventReduceResult<RxDocumentType> = EventReduceResultNeg | EventReduceResultPos<RxDocumentType>;
 
@@ -156,6 +157,17 @@ function canFillResultSetFromLimitBuffer<RxDocumentType>(s: StateResolveFunction
     );
 }
 
+
+function actionRemovesItemFromResults(action: ActionName): boolean {
+    return [
+        'removeFirstItem',
+        'removeLastItem',
+        'removeExisting',
+        'runFullQueryAgain',
+    ].includes(action);
+}
+
+
 export function calculateNewResults<RxDocumentType>(
     rxQuery: RxQuery<RxDocumentType>,
     rxChangeEvents: RxChangeEvent<RxDocumentType>[]
@@ -169,6 +181,7 @@ export function calculateNewResults<RxDocumentType>(
     const previousResults: RxDocumentType[] = ensureNotFalsy(rxQuery._result).docsData.slice(0);
     const previousResultsMap: Map<string, RxDocumentType> = ensureNotFalsy(rxQuery._result).docsDataMap;
     let changed: boolean = false;
+    let limitResultsRemoved: boolean = false;
 
     const eventReduceEvents: ChangeEvent<RxDocumentType>[] = rxChangeEvents
         .map(cE => rxChangeEventToEventReduceChangeEvent(cE))
@@ -217,6 +230,9 @@ export function calculateNewResults<RxDocumentType>(
                 previousResults,
                 previousResultsMap
             );
+            if (actionRemovesItemFromResults(actionName)) {
+                limitResultsRemoved = true;
+            }
             return false;
         }
     });
@@ -228,7 +244,8 @@ export function calculateNewResults<RxDocumentType>(
         return {
             runFullQueryAgain: false,
             changed,
-            newResults: previousResults
+            newResults: previousResults,
+            limitResultsRemoved,
         };
     }
 }
