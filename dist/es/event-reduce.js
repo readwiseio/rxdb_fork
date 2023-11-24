@@ -1,4 +1,4 @@
-import { calculateActionName, runAction, hasLimit, isUpdate, isDelete, isFindOne, isInsert, hasSkip, wasResultsEmpty, wasInResult, wasSortedAfterLast, previousUnknown, wasLimitReached, wasMatching, doesMatchNow } from 'event-reduce-js';
+import { calculateActionName, runAction, hasLimit, isUpdate, isDelete, isFindOne, isInsert, hasSkip, wasResultsEmpty, wasInResult, wasSortedAfterLast, previousUnknown, wasLimitReached, wasMatching, doesMatchNow, wasFirst, wasLast, isSortedAfterLast, wasSortedBeforeFirst, isSortedBeforeFirst, sortParamsChanged } from 'event-reduce-js';
 import { rxChangeEventToEventReduceChangeEvent } from './rx-change-event';
 import { arrayFilterNotEmpty, clone, ensureNotFalsy, getFromMapOrCreate } from './plugins/utils';
 import { getQueryMatcher, getSortComparator, normalizeMangoQuery } from './rx-query-helper';
@@ -99,6 +99,18 @@ function canFillResultSetFromLimitBuffer(s) {
   ;
 }
 
+function isBrokenSortedLimitCase(s) {
+  // The issue is specifically with limited, sorted lists having updated items moved to the top. See RW-33967.
+  return !isInsert(s) && isUpdate(s) && !isDelete(s) && hasLimit(s) && !isFindOne(s) && !hasSkip(s) && !wasResultsEmpty(s) && !previousUnknown(s) &&
+  // wasLimitReached(s) && // both of these was LimitReachedCases are bork.
+  !wasFirst(s) && !wasLast(s) && sortParamsChanged(s) && !wasInResult(s) && !wasSortedBeforeFirst(s) && wasSortedAfterLast(s) && isSortedBeforeFirst(s) && !isSortedAfterLast(s) && !wasMatching(s) && doesMatchNow(s);
+}
+function isBrokenSortedLimitCaseWithSkip(s) {
+  // The issue is specifically with limited, sorted lists having updated items moved to the top. See RW-33967.
+  return !isInsert(s) && isUpdate(s) && !isDelete(s) && hasLimit(s) && !isFindOne(s) && hasSkip(s) && !wasResultsEmpty(s) && !previousUnknown(s) &&
+  // wasLimitReached(s) && // both of these was LimitReachedCases are bork.
+  !wasFirst(s) && !wasLast(s) && sortParamsChanged(s) && !wasInResult(s) && !wasSortedBeforeFirst(s) && wasSortedAfterLast(s) && isSortedBeforeFirst(s) && !isSortedAfterLast(s) && !wasMatching(s) && doesMatchNow(s);
+}
 export function calculateNewResults(rxQuery, rxChangeEvents) {
   if (!rxQuery.collection.database.eventReduce) {
     return {
@@ -135,6 +147,17 @@ export function calculateNewResults(rxQuery, rxChangeEvents) {
         }
         return false;
       }
+      return true;
+    } else if (actionName === 'doNothing' && isBrokenSortedLimitCase(stateResolveFunctionInput)) {
+      changed = true;
+      runAction('removeLastInsertFirst', queryParams, eventReduceEvent, previousResults, previousResultsMap);
+      return false;
+    } else if (actionName === 'insertLast' && isBrokenSortedLimitCase(stateResolveFunctionInput)) {
+      changed = true;
+      runAction('insertFirst', queryParams, eventReduceEvent, previousResults, previousResultsMap);
+      return false;
+    } else if (actionName === 'doNothing' && isBrokenSortedLimitCaseWithSkip(stateResolveFunctionInput)) {
+      // We have to do a full re-exec of the query in this case with the skip:
       return true;
     } else if (actionName !== 'doNothing') {
       changed = true;
