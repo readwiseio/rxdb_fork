@@ -13,15 +13,15 @@ import {
     shareReplay
 } from 'rxjs/operators';
 import {
-    sortObject,
-    stringifyFilter,
-    pluginMissing,
-    overwriteGetterForCaching,
-    now,
-    PROMISE_RESOLVE_FALSE,
-    RXJS_SHARE_REPLAY_DEFAULTS,
+    areRxDocumentArraysEqual,
     ensureNotFalsy,
-    areRxDocumentArraysEqual
+    now,
+    overwriteGetterForCaching,
+    pluginMissing,
+    PROMISE_RESOLVE_FALSE, RX_META_LWT_MINIMUM,
+    RXJS_SHARE_REPLAY_DEFAULTS,
+    sortObject,
+    stringifyFilter
 } from './plugins/utils';
 import {
     newRxError
@@ -30,27 +30,35 @@ import {
     runPluginHooks
 } from './hooks';
 import type {
+    MangoQuery,
+    MangoQuerySelector,
+    MangoQuerySortPart,
+    PreparedQuery,
+    QueryMatcher,
+    RxChangeEvent,
     RxCollection,
     RxDocument,
-    RxQueryOP,
-    RxQuery,
-    MangoQuery,
-    MangoQuerySortPart,
-    MangoQuerySelector,
-    PreparedQuery,
-    RxChangeEvent,
-    RxDocumentWriteData,
     RxDocumentData,
-    QueryMatcher
+    RxDocumentWriteData,
+    RxQuery,
+    RxQueryOP
 } from './types';
 import { calculateNewResults } from './event-reduce';
 import { triggerCacheReplacement } from './query-cache';
-import { getQueryMatcher, normalizeMangoQuery } from './rx-query-helper';
+import { getQueryMatcher, getSortComparator, normalizeMangoQuery } from './rx-query-helper';
+
+export interface QueryCacheBackend {
+    getItem<T extends string | string[]>(key: string): Promise<T | null>;
+    setItem<T extends string | string[]>(key: string, value: T): Promise<T>;
+}
 
 let _queryCount = 0;
 const newQueryID = function (): number {
     return ++_queryCount;
 };
+
+// allow changes to be 100ms older than the actual lwt value
+const UPDATE_DRIFT = 100;
 
 export class RxQueryBase<
     RxDocType,
@@ -85,6 +93,7 @@ export class RxQueryBase<
         docsData: RxDocumentData<RxDocType>[];
         // A key->document map, used in the event reduce optimization.
         docsDataMap: Map<string, RxDocType>;
+        docsKeys: string[];
         docsMap: Map<string, RxDocument<RxDocType>>;
         docs: RxDocument<RxDocType>[];
         count: number;
@@ -190,6 +199,12 @@ export class RxQueryBase<
     public _limitBufferSize: number | null = null;
     public _limitBufferResults: RxDocumentData<RxDocType>[] | null = null;
 
+    // Fields used for the persistent query cache when enabled:
+    public _persistentQueryCacheResult?: string[] | string = undefined;
+    public _persistentQueryCacheResultLwt?: string = undefined; // lwt = latest write time
+    public _persistentQueryCacheLoaded?: Promise<void>;
+    public _persistentQueryCacheBackend?: QueryCacheBackend;
+
     /**
      * ensures that the exec-runs
      * are not run in parallel
@@ -213,6 +228,7 @@ export class RxQueryBase<
         if (typeof newResultData === 'number') {
             this._result = {
                 docsData: [],
+                docsKeys: [],
                 docsMap: new Map(),
                 docsDataMap: new Map(),
                 count: newResultData,
@@ -235,14 +251,17 @@ export class RxQueryBase<
          * we directly use the objects that are stored in the RxDocument
          * to ensure we do not store the same data twice and fill up the memory.
          */
+        const docsKeys: string[] = [];
         const docsData = docs.map(doc => {
             docsDataMap.set(doc.primary, doc._data);
             docsMap.set(doc.primary, doc);
+            docsKeys.push(doc.primary);
             return doc._data;
         });
 
         this._result = {
             docsData,
+            docsKeys,
             docsMap,
             docsDataMap,
             count: docsData.length,
@@ -261,6 +280,12 @@ export class RxQueryBase<
 
 
         if (this.op === 'count') {
+            // if we have a persisted query cache result, use the result
+            if (this._persistentQueryCacheResult) {
+                // TODO: correct this number, but how?
+                return Number(this._persistentQueryCacheResult);
+            }
+
             const preparedQuery = this.getPreparedQuery();
             const result = await this.collection.storageInstance.count(preparedQuery);
             if (result.mode === 'slow' && !this.collection.database.allowSlowCount) {
@@ -382,6 +407,10 @@ export class RxQueryBase<
         return value;
     }
 
+    persistentQueryId() {
+        return String(this.collection.database.hashFunction(this.toString()));
+    }
+
     /**
      * returns the prepared query
      * which can be send to the storage instance to query for documents.
@@ -490,6 +519,120 @@ export class RxQueryBase<
         this._limitBufferSize = bufferSize;
         return this;
     }
+
+    enablePersistentQueryCache(backend: QueryCacheBackend) {
+        this._persistentQueryCacheBackend = backend;
+        this._persistentQueryCacheLoaded = this._restoreQueryCacheFromPersistedState();
+        return this;
+    }
+
+    private async _restoreQueryCacheFromPersistedState() {
+        if (!this._persistentQueryCacheBackend) {
+            // no cache backend provided, do nothing
+            return;
+        }
+
+        if (this._persistentQueryCacheResult) {
+            // we already restored the cache once, no need to run twice
+            return;
+        }
+
+        if (this.mangoQuery.skip) {
+            console.error('The persistent query cache only works on non-skip queries.');
+            return;
+        }
+
+        const persistentQueryId = this.persistentQueryId();
+        const value = await this._persistentQueryCacheBackend.getItem<string[] | string>(`qc:${persistentQueryId}`);
+        if (!value) {
+          return;
+        }
+
+        const lwt = (await this._persistentQueryCacheBackend.getItem(`qc:${persistentQueryId}:lwt`)) as string | null;
+        const primaryPath = this.collection.schema.primaryPath;
+
+        this._persistentQueryCacheResult = value ?? undefined;
+        this._persistentQueryCacheResultLwt = lwt ?? undefined;
+
+        // if this is a regular query, also load documents into cache
+        if (Array.isArray(value) && value.length > 0) {
+            const persistedQueryCacheIds = new Set(this._persistentQueryCacheResult);
+
+            let docsData: RxDocumentData<RxDocType>[] = [];
+
+            // query all docs updated > last persisted, limit to an arbitrary 1_000_000 (10x of what we consider our largest library)
+            const {documents: changedDocs} = await this.collection.storageInstance.getChangedDocumentsSince(
+              1_000_000,
+              // make sure we remove the monotonic clock (xxx.01, xxx.02) from the lwt timestamp to avoid issues with
+              // lookups in indices (dexie)
+              {id: '', lwt: Math.floor(Number(lwt)) - UPDATE_DRIFT}
+            );
+
+            for (const changedDoc of changedDocs) {
+              /*
+               * no need to fetch again, we already got the doc from the list of changed docs, and therefore we filter
+               * deleted docs as well
+               */
+              persistedQueryCacheIds.delete(changedDoc[primaryPath] as string);
+
+              // ignore deleted docs or docs that do not match the query
+              if (!this.doesDocumentDataMatch(changedDoc)) {
+                continue;
+              }
+
+              // add to document cache
+              this.collection._docCache.getCachedRxDocument(changedDoc);
+
+              // add to docs
+              docsData.push(changedDoc);
+            }
+
+            // fetch remaining persisted doc ids
+            const nonRestoredDocIds: string[] = [];
+            for (const docId of persistedQueryCacheIds) {
+                // first try to fill from docCache
+                const docData = this.collection._docCache.getLatestDocumentDataIfExists(docId);
+                if (docData && this.doesDocumentDataMatch(docData)) {
+                  docsData.push(docData);
+                }
+
+                if (!docData) {
+                  nonRestoredDocIds.push(docId);
+                }
+            }
+
+            // otherwise get from storage
+            if (nonRestoredDocIds.length > 0) {
+              const docsMap = await this.collection.storageInstance.findDocumentsById(nonRestoredDocIds, false);
+              Object.values(docsMap).forEach(docData => {
+                this.collection._docCache.getCachedRxDocument(docData);
+                docsData.push(docData);
+              });
+            }
+
+            const normalizedMangoQuery = normalizeMangoQuery<RxDocType>(
+              this.collection.schema.jsonSchema,
+              this.mangoQuery
+            );
+            const sortComparator = getSortComparator(this.collection.schema.jsonSchema, normalizedMangoQuery);
+            const skip = normalizedMangoQuery.skip ? normalizedMangoQuery.skip : 0;
+            const limit = normalizedMangoQuery.limit ? normalizedMangoQuery.limit : Infinity;
+            const skipPlusLimit = skip + limit;
+            docsData = docsData.sort(sortComparator);
+            docsData = docsData.slice(skip, skipPlusLimit);
+
+
+            // get query into the correct state
+            this._lastEnsureEqual = now();
+            this._latestChangeEvent = this.collection._changeEventBuffer.counter;
+            this._setResultData(docsData);
+        } else if (value && Number.isInteger(Number(value))) {
+            // get query into the correct state
+            this._lastEnsureEqual = now();
+            this._latestChangeEvent = this.collection._changeEventBuffer.counter;
+            this._setResultData(Number(value));
+        }
+    }
 }
 
 export function _getDefaultQuery<RxDocType>(): MangoQuery<RxDocType> {
@@ -524,6 +667,7 @@ export function createRxQuery<RxDocType>(
 
     // ensure when created with same params, only one is created
     ret = tunnelQueryCache(ret);
+    // TODO: clear persistent query cache as well
     triggerCacheReplacement(collection);
 
     return ret;
@@ -563,11 +707,14 @@ function _ensureEqual(rxQuery: RxQueryBase<any>): Promise<boolean> {
     return rxQuery._ensureEqualQueue;
 }
 
+
 /**
  * ensures that the results of this query is equal to the results which a query over the database would give
  * @return true if results have changed
  */
-function __ensureEqual<RxDocType>(rxQuery: RxQueryBase<RxDocType>): Promise<boolean> {
+async function __ensureEqual<RxDocType>(rxQuery: RxQueryBase<RxDocType>): Promise<boolean> {
+    await rxQuery._persistentQueryCacheLoaded;
+
     rxQuery._lastEnsureEqual = now();
 
     /**
@@ -634,6 +781,7 @@ function __ensureEqual<RxDocType>(rxQuery: RxQueryBase<RxDocType>): Promise<bool
                 if (newCount !== previousCount) {
                     ret = true; // true because results changed
                     rxQuery._setResultData(newCount as any);
+                    await updatePersistentQueryCache(rxQuery);
                 }
             } else {
                 // 'find' or 'findOne' query
@@ -648,11 +796,20 @@ function __ensureEqual<RxDocType>(rxQuery: RxQueryBase<RxDocType>): Promise<bool
                     // we got the new results, we do not have to re-execute, mustReExec stays false
                     ret = true; // true because results changed
                     rxQuery._setResultData(eventReduceResult.newResults as any);
+
+                    /*
+                     * We usually want to persist the cache every time there is an update to the query to guarantee
+                     * correctness. Cache persistence has some "cost", and we therefore try to optimize the number of
+                     * writes.
+                     * So, if any item in the result set was removed, we re-persist the query.
+                    */
+                    if (rxQuery.mangoQuery.limit && eventReduceResult.limitResultsRemoved) {
+                      await updatePersistentQueryCache(rxQuery);
+                    }
                 }
             }
         }
     }
-
 
 
     // oh no we have to re-execute the whole query over the database
@@ -686,9 +843,69 @@ function __ensureEqual<RxDocType>(rxQuery: RxQueryBase<RxDocType>): Promise<bool
                     rxQuery._setResultData(newResultData as any);
                 }
                 return ret;
+            })
+            .then(async (returnValue) => {
+                await updatePersistentQueryCache(rxQuery);
+                return returnValue;
             });
     }
-    return Promise.resolve(ret); // true if results have changed
+
+    return ret; // true if results have changed
+}
+
+
+async function updatePersistentQueryCache<RxDocType>(rxQuery: RxQueryBase<RxDocType>) {
+    if (!rxQuery._persistentQueryCacheBackend) {
+        return;
+    }
+
+    const backend = rxQuery._persistentQueryCacheBackend;
+
+    const isCount = rxQuery._result?.docs.length === 0 && rxQuery._result.count > 0;
+
+    const key = rxQuery.persistentQueryId();
+    const value = isCount
+        ? rxQuery._result?.count?.toString() ?? '0'
+        : rxQuery._result?.docsKeys ?? [];
+
+    // update _persistedQueryCacheResult
+    rxQuery._persistentQueryCacheResult = value;
+
+    // eslint-disable-next-line no-console
+    console.time(`Query persistence: persisting results of ${JSON.stringify(rxQuery.mangoQuery)}`);
+    // persist query cache
+    const lwt = rxQuery._result?.time ?? RX_META_LWT_MINIMUM;
+    await backend.setItem(`qc:${String(key)}`, value);
+    await backend.setItem(`qc:${String(key)}:lwt`, lwt.toString());
+
+    // eslint-disable-next-line no-console
+    console.timeEnd(`Query persistence: persisting results of ${JSON.stringify(rxQuery.mangoQuery)}`);
+}
+
+
+// Refactored out of `queryCollection`: modifies the docResults array to fill it with data
+async function _queryCollectionByIds<RxDocType>(rxQuery: RxQuery<RxDocType> | RxQueryBase<RxDocType>, docResults: RxDocumentData<RxDocType>[], docIds: string[]) {
+    const collection = rxQuery.collection;
+    docIds = docIds.filter(docId => {
+        // first try to fill from docCache
+        const docData = rxQuery.collection._docCache.getLatestDocumentDataIfExists(docId);
+        if (docData) {
+            if (!docData._deleted) {
+                docResults.push(docData);
+            }
+            return false;
+        } else {
+            return true;
+        }
+    });
+
+    // otherwise get from storage
+    if (docIds.length > 0) {
+        const docsMap = await collection.storageInstance.findDocumentsById(docIds, false);
+        Object.values(docsMap).forEach(docData => {
+            docResults.push(docData);
+        });
+    }
 }
 
 /**
@@ -700,6 +917,8 @@ function __ensureEqual<RxDocType>(rxQuery: RxQueryBase<RxDocType>): Promise<bool
 export async function queryCollection<RxDocType>(
     rxQuery: RxQuery<RxDocType> | RxQueryBase<RxDocType>
 ): Promise<RxDocumentData<RxDocType>[]> {
+    await rxQuery._persistentQueryCacheLoaded;
+
     let docs: RxDocumentData<RxDocType>[] = [];
     const collection = rxQuery.collection;
 
@@ -711,26 +930,7 @@ export async function queryCollection<RxDocType>(
      */
     if (rxQuery.isFindOneByIdQuery) {
         if (Array.isArray(rxQuery.isFindOneByIdQuery)) {
-            let docIds = rxQuery.isFindOneByIdQuery;
-            docIds = docIds.filter(docId => {
-                // first try to fill from docCache
-                const docData = rxQuery.collection._docCache.getLatestDocumentDataIfExists(docId);
-                if (docData) {
-                    if (!docData._deleted) {
-                        docs.push(docData);
-                    }
-                    return false;
-                } else {
-                    return true;
-                }
-            });
-            // otherwise get from storage
-            if (docIds.length > 0) {
-                const docsMap = await collection.storageInstance.findDocumentsById(docIds, false);
-                Object.values(docsMap).forEach(docData => {
-                    docs.push(docData);
-                });
-            }
+            await _queryCollectionByIds(rxQuery, docs, rxQuery.isFindOneByIdQuery);
         } else {
             const docId = rxQuery.isFindOneByIdQuery;
 
@@ -758,7 +958,6 @@ export async function queryCollection<RxDocType>(
         docs = queryResult.documents;
     }
     return docs;
-
 }
 
 /**
@@ -802,7 +1001,6 @@ export function isFindOneByIdQuery(
     }
     return false;
 }
-
 
 
 export function isRxQuery(obj: any): boolean {

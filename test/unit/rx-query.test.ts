@@ -6,6 +6,7 @@ import clone from 'clone';
 import * as humansCollection from './../helper/humans-collection';
 import * as schemaObjects from '../helper/schema-objects';
 import * as schemas from './../helper/schemas';
+import {Cache, clearQueryCache} from '../helper/cache';
 
 import {
     isRxQuery,
@@ -14,6 +15,7 @@ import {
     promiseWait,
     randomCouchString,
     ensureNotFalsy,
+    now,
 } from '../../';
 
 import { firstValueFrom } from 'rxjs';
@@ -1578,6 +1580,256 @@ describe('rx-query.test.ts', () => {
             // Make sure we DO NOT pull the modified item from the limit buffer, as it no longer matches query:
             const updatedResults = await query.exec();
             assert.notStrictEqual(updatedResults[updatedResults.length - 1].passportId, firstBufferItem.passportId);
+
+            collection.database.destroy();
+        });
+    });
+
+    async function setUpPersistentQueryCacheCollection() {
+        const collection = await humansCollection.create(0);
+        return {collection};
+    }
+
+    config.parallel('Persistent Query Cache', () => {
+        it('query fills cache', async () => {
+            const {collection} = await setUpPersistentQueryCacheCollection();
+
+            const query = collection.find({ limit: 1 });
+            const cache = new Cache();
+            query.enablePersistentQueryCache(cache);
+
+            const human1 = schemaObjects.human();
+            const human2 = schemaObjects.human();
+
+            await collection.bulkInsert([human1, human2]);
+            await query.exec();
+
+            assert.strictEqual(cache.size, 2);
+
+            collection.database.destroy();
+        });
+
+        it('does not query from database after restoring from persistent query cache', async () => {
+            const {collection} = await setUpPersistentQueryCacheCollection();
+
+            const human1 = schemaObjects.human();
+            const human2 = schemaObjects.human();
+
+            await collection.bulkInsert([human1, human2]);
+
+            const query = collection.find({ limit: 2 });
+
+            // fill cache
+            const queryId = query.persistentQueryId();
+            const cache = new Cache();
+            await cache.setItem(`qc:${queryId}`, [human1.passportId, human2.passportId]);
+            await cache.setItem(`qc:${queryId}:lwt`, `${now()}`);
+            query.enablePersistentQueryCache(cache);
+
+            // execute query
+            const result = await query.exec();
+
+            assert.strictEqual(result.length, 2);
+            assert.strictEqual(query._execOverDatabaseCount, 0);
+
+            collection.database.destroy();
+        });
+
+        it('does not query from database after modifying a document', async () => {
+            const {collection} = await setUpPersistentQueryCacheCollection();
+
+            const human1 = schemaObjects.human();
+            const human1Age = human1.age;
+
+            await collection.bulkInsert([human1]);
+
+            const query1 = collection.find({ selector: { age: human1Age }});
+
+            // fill cache
+            const queryId = query1.persistentQueryId();
+            const cache = new Cache();
+            await cache.setItem(`qc:${queryId}`, [human1.passportId]);
+            await cache.setItem(`qc:${queryId}:lwt`, `${now()}`);
+            query1.enablePersistentQueryCache(cache);
+
+            // execute query
+            const result1 = await query1.exec();
+            assert.strictEqual(result1.length, 1);
+
+            const human1Doc = result1[0];
+            await human1Doc.modify(data => {
+              data.age += 1;
+              return data;
+            });
+
+            clearQueryCache(collection);
+
+            const query2 = collection.find({ selector: { age: human1Age }});
+            query2.enablePersistentQueryCache(cache);
+
+            const result2 = await query2.exec();
+
+            assert.strictEqual(result1.length, 1);
+            assert.strictEqual(result2.length, 0);
+            assert.strictEqual(query1._execOverDatabaseCount, 0);
+            assert.strictEqual(query2._execOverDatabaseCount, 0);
+
+            collection.database.destroy();
+        });
+
+        it('does not query from database after adding an object', async () => {
+            const {collection} = await setUpPersistentQueryCacheCollection();
+
+            const human1 = schemaObjects.human();
+            const human2 = schemaObjects.human();
+            const human3 = schemaObjects.human();
+
+            await collection.bulkInsert([human1, human2]);
+
+            const query = collection.find({ limit: 3 });
+            const queryId = query.persistentQueryId();
+            const cache = new Cache();
+            await cache.setItem(`qc:${queryId}`, [human1.passportId, human2.passportId]);
+            await cache.setItem(`qc:${queryId}:lwt`, `${now()}`);
+            query.enablePersistentQueryCache(cache);
+
+            const result1 = await query.exec();
+
+            await collection.insert(human3);
+
+            const result2 = await query.exec();
+
+            assert.strictEqual(result1.length, 2);
+            assert.strictEqual(result2.length, 3);
+            assert.strictEqual(query._execOverDatabaseCount, 0);
+
+            collection.database.destroy();
+        });
+
+        it('does return docs from cache in correct order and with limits applied', async () => {
+            const {collection} = await setUpPersistentQueryCacheCollection();
+
+            const human1 = schemaObjects.human('1', 30);
+            const human2 = schemaObjects.human('2', 40);
+            const human3 = schemaObjects.human('3', 50);
+
+            await collection.bulkInsert([human2, human3]);
+
+            const query1 = collection.find({ limit: 2, sort: [{age: 'asc'}] });
+            const queryId = query1.persistentQueryId();
+            const lwt = now();
+
+            const cache = new Cache();
+            await cache.setItem(`qc:${queryId}`, [human2.passportId, human3.passportId]);
+            await cache.setItem(`qc:${queryId}:lwt`, `${lwt}`);
+
+            await collection.insert(human1);
+
+            clearQueryCache(collection);
+
+            const query2 = collection.find({ limit: 2, sort: [{age: 'asc'}] });
+            query2.enablePersistentQueryCache(cache);
+
+            const result2 = await query2.exec();
+
+            assert.strictEqual(query1._execOverDatabaseCount, 0);
+            assert.strictEqual(query2._execOverDatabaseCount, 0);
+            assert.deepStrictEqual(result2.map(item => item.passportId), ['1', '2']);
+
+            collection.database.destroy();
+        });
+
+        it('removing an item from the database, but not from cache does not lead to wrong results after restoring', async () => {
+            const {collection} = await setUpPersistentQueryCacheCollection();
+
+            const human1 = schemaObjects.human('1', 30);
+            const human2 = schemaObjects.human('2', 40);
+            const human3 = schemaObjects.human('3', 50);
+
+            await collection.bulkInsert([human1, human2, human3]);
+
+            const query1 = collection.find({ limit: 2, sort: [{age: 'asc'}] });
+            const queryId = query1.persistentQueryId();
+            const lwt = now();
+
+            const cache = new Cache();
+            await cache.setItem(`qc:${queryId}`, [human1.passportId, human2.passportId, human3.passportId]);
+            await cache.setItem(`qc:${queryId}:lwt`, `${lwt}`);
+
+            const removeQuery = collection.find({ selector: { passportId: '2' }});
+            await removeQuery.remove();
+
+            clearQueryCache(collection);
+
+            const query2 = collection.find({ limit: 2, sort: [{age: 'asc'}] });
+            query2.enablePersistentQueryCache(cache);
+
+            assert.strictEqual(cache.getItem(`qc:${queryId}`).length, 3);
+
+            const result2 = await query2.exec();
+
+            assert.strictEqual(query1._execOverDatabaseCount, 0);
+            assert.strictEqual(query2._execOverDatabaseCount, 0);
+            assert.deepStrictEqual(result2.map(item => item.passportId), ['1', '3']);
+
+            collection.database.destroy();
+        });
+
+        it('old cache values are updated when documents are modified', async () => {
+            const {collection} = await setUpPersistentQueryCacheCollection();
+
+            const human1 = schemaObjects.human('1', 30);
+
+            await collection.bulkInsert([human1]);
+
+            // fill cache
+            const cache = new Cache();
+            const query1 = collection.find({});
+            query1.enablePersistentQueryCache(cache);
+            const queryId = query1.persistentQueryId();
+
+            const result1 = await query1.exec();
+            assert.strictEqual(result1.length, 1);
+            assert.strictEqual(cache.size, 2);
+
+            clearQueryCache(collection);
+
+            // go back in time
+            const lwt = now() - 7200 * 1000; // go back in time (2hrs)
+            await cache.setItem(`qc:${queryId}:lwt`, `${lwt}`);
+
+            const query2 = collection.find({});
+            query2.enablePersistentQueryCache(cache);
+            await query2._persistentQueryCacheLoaded;
+
+            await result1[0].modify(data => {
+              data.age = 40;
+              return data;
+            });
+
+            await query2.exec();
+
+            const currLwt = Number(await cache.getItem(`qc:${queryId}:lwt`));
+            assert.strictEqual(currLwt > lwt, true);
+
+            collection.database.destroy();
+        });
+
+        it('query from database when cache is empty', async () => {
+            const {collection} = await setUpPersistentQueryCacheCollection();
+
+            const human1 = schemaObjects.human();
+            await collection.bulkInsert([human1]);
+
+            const query = collection.find({ limit: 3 });
+
+            const cache = new Cache();
+            query.enablePersistentQueryCache(cache);
+
+            const result = await query.exec();
+
+            assert.strictEqual(result.length, 1);
+            assert.strictEqual(query._execOverDatabaseCount, 1);
 
             collection.database.destroy();
         });
