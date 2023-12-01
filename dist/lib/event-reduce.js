@@ -88,8 +88,6 @@ function canFillResultSetFromLimitBuffer(s) {
   // we could potentially make skip queries work later, but for now ignore them -- too hard
   !(0, _eventReduceJs.wasResultsEmpty)(s) &&
   // this should never happen
-  !(0, _eventReduceJs.previousUnknown)(s) &&
-  // we need to have had the prev result set
   (0, _eventReduceJs.wasLimitReached)(s) &&
   // if not, the event reducer shouldn't have a problem
   // any value of wasFirst(s), position is not relevant for this case, as wasInResults
@@ -108,18 +106,6 @@ function canFillResultSetFromLimitBuffer(s) {
   ;
 }
 
-function isBrokenSortedLimitCase(s) {
-  // The issue is specifically with limited, sorted lists having updated items moved to the top. See RW-33967.
-  return !(0, _eventReduceJs.isInsert)(s) && (0, _eventReduceJs.isUpdate)(s) && !(0, _eventReduceJs.isDelete)(s) && (0, _eventReduceJs.hasLimit)(s) && !(0, _eventReduceJs.isFindOne)(s) && !(0, _eventReduceJs.hasSkip)(s) && !(0, _eventReduceJs.wasResultsEmpty)(s) && !(0, _eventReduceJs.previousUnknown)(s) &&
-  // wasLimitReached(s) && // both of these was LimitReachedCases are bork.
-  !(0, _eventReduceJs.wasFirst)(s) && !(0, _eventReduceJs.wasLast)(s) && (0, _eventReduceJs.sortParamsChanged)(s) && !(0, _eventReduceJs.wasInResult)(s) && !(0, _eventReduceJs.wasSortedBeforeFirst)(s) && (0, _eventReduceJs.wasSortedAfterLast)(s) && (0, _eventReduceJs.isSortedBeforeFirst)(s) && !(0, _eventReduceJs.isSortedAfterLast)(s) && !(0, _eventReduceJs.wasMatching)(s) && (0, _eventReduceJs.doesMatchNow)(s);
-}
-function isBrokenSortedLimitCaseWithSkip(s) {
-  // The issue is specifically with limited, sorted lists having updated items moved to the top. See RW-33967.
-  return !(0, _eventReduceJs.isInsert)(s) && (0, _eventReduceJs.isUpdate)(s) && !(0, _eventReduceJs.isDelete)(s) && (0, _eventReduceJs.hasLimit)(s) && !(0, _eventReduceJs.isFindOne)(s) && (0, _eventReduceJs.hasSkip)(s) && !(0, _eventReduceJs.wasResultsEmpty)(s) && !(0, _eventReduceJs.previousUnknown)(s) &&
-  // wasLimitReached(s) && // both of these was LimitReachedCases are bork.
-  !(0, _eventReduceJs.wasFirst)(s) && !(0, _eventReduceJs.wasLast)(s) && (0, _eventReduceJs.sortParamsChanged)(s) && !(0, _eventReduceJs.wasInResult)(s) && !(0, _eventReduceJs.wasSortedBeforeFirst)(s) && (0, _eventReduceJs.wasSortedAfterLast)(s) && (0, _eventReduceJs.isSortedBeforeFirst)(s) && !(0, _eventReduceJs.isSortedAfterLast)(s) && !(0, _eventReduceJs.wasMatching)(s) && (0, _eventReduceJs.doesMatchNow)(s);
-}
 function calculateNewResults(rxQuery, rxChangeEvents) {
   if (!rxQuery.collection.database.eventReduce) {
     return {
@@ -156,17 +142,6 @@ function calculateNewResults(rxQuery, rxChangeEvents) {
         }
         return false;
       }
-      return true;
-    } else if (actionName === 'doNothing' && isBrokenSortedLimitCase(stateResolveFunctionInput)) {
-      changed = true;
-      (0, _eventReduceJs.runAction)('removeLastInsertFirst', queryParams, eventReduceEvent, previousResults, previousResultsMap);
-      return false;
-    } else if (actionName === 'insertLast' && isBrokenSortedLimitCase(stateResolveFunctionInput)) {
-      changed = true;
-      (0, _eventReduceJs.runAction)('insertFirst', queryParams, eventReduceEvent, previousResults, previousResultsMap);
-      return false;
-    } else if (actionName === 'doNothing' && isBrokenSortedLimitCaseWithSkip(stateResolveFunctionInput)) {
-      // We have to do a full re-exec of the query in this case with the skip:
       return true;
     } else if (actionName !== 'doNothing') {
       changed = true;

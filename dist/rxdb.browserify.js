@@ -597,8 +597,6 @@ function canFillResultSetFromLimitBuffer(s) {
   // we could potentially make skip queries work later, but for now ignore them -- too hard
   !(0, _eventReduceJs.wasResultsEmpty)(s) &&
   // this should never happen
-  !(0, _eventReduceJs.previousUnknown)(s) &&
-  // we need to have had the prev result set
   (0, _eventReduceJs.wasLimitReached)(s) &&
   // if not, the event reducer shouldn't have a problem
   // any value of wasFirst(s), position is not relevant for this case, as wasInResults
@@ -617,18 +615,6 @@ function canFillResultSetFromLimitBuffer(s) {
   ;
 }
 
-function isBrokenSortedLimitCase(s) {
-  // The issue is specifically with limited, sorted lists having updated items moved to the top. See RW-33967.
-  return !(0, _eventReduceJs.isInsert)(s) && (0, _eventReduceJs.isUpdate)(s) && !(0, _eventReduceJs.isDelete)(s) && (0, _eventReduceJs.hasLimit)(s) && !(0, _eventReduceJs.isFindOne)(s) && !(0, _eventReduceJs.hasSkip)(s) && !(0, _eventReduceJs.wasResultsEmpty)(s) && !(0, _eventReduceJs.previousUnknown)(s) &&
-  // wasLimitReached(s) && // both of these was LimitReachedCases are bork.
-  !(0, _eventReduceJs.wasFirst)(s) && !(0, _eventReduceJs.wasLast)(s) && (0, _eventReduceJs.sortParamsChanged)(s) && !(0, _eventReduceJs.wasInResult)(s) && !(0, _eventReduceJs.wasSortedBeforeFirst)(s) && (0, _eventReduceJs.wasSortedAfterLast)(s) && (0, _eventReduceJs.isSortedBeforeFirst)(s) && !(0, _eventReduceJs.isSortedAfterLast)(s) && !(0, _eventReduceJs.wasMatching)(s) && (0, _eventReduceJs.doesMatchNow)(s);
-}
-function isBrokenSortedLimitCaseWithSkip(s) {
-  // The issue is specifically with limited, sorted lists having updated items moved to the top. See RW-33967.
-  return !(0, _eventReduceJs.isInsert)(s) && (0, _eventReduceJs.isUpdate)(s) && !(0, _eventReduceJs.isDelete)(s) && (0, _eventReduceJs.hasLimit)(s) && !(0, _eventReduceJs.isFindOne)(s) && (0, _eventReduceJs.hasSkip)(s) && !(0, _eventReduceJs.wasResultsEmpty)(s) && !(0, _eventReduceJs.previousUnknown)(s) &&
-  // wasLimitReached(s) && // both of these was LimitReachedCases are bork.
-  !(0, _eventReduceJs.wasFirst)(s) && !(0, _eventReduceJs.wasLast)(s) && (0, _eventReduceJs.sortParamsChanged)(s) && !(0, _eventReduceJs.wasInResult)(s) && !(0, _eventReduceJs.wasSortedBeforeFirst)(s) && (0, _eventReduceJs.wasSortedAfterLast)(s) && (0, _eventReduceJs.isSortedBeforeFirst)(s) && !(0, _eventReduceJs.isSortedAfterLast)(s) && !(0, _eventReduceJs.wasMatching)(s) && (0, _eventReduceJs.doesMatchNow)(s);
-}
 function calculateNewResults(rxQuery, rxChangeEvents) {
   if (!rxQuery.collection.database.eventReduce) {
     return {
@@ -665,17 +651,6 @@ function calculateNewResults(rxQuery, rxChangeEvents) {
         }
         return false;
       }
-      return true;
-    } else if (actionName === 'doNothing' && isBrokenSortedLimitCase(stateResolveFunctionInput)) {
-      changed = true;
-      (0, _eventReduceJs.runAction)('removeLastInsertFirst', queryParams, eventReduceEvent, previousResults, previousResultsMap);
-      return false;
-    } else if (actionName === 'insertLast' && isBrokenSortedLimitCase(stateResolveFunctionInput)) {
-      changed = true;
-      (0, _eventReduceJs.runAction)('insertFirst', queryParams, eventReduceEvent, previousResults, previousResultsMap);
-      return false;
-    } else if (actionName === 'doNothing' && isBrokenSortedLimitCaseWithSkip(stateResolveFunctionInput)) {
-      // We have to do a full re-exec of the query in this case with the skip:
       return true;
     } else if (actionName !== 'doNothing') {
       changed = true;
@@ -10156,7 +10131,7 @@ function minimalStringToSimpleBdd(str) {
         const node0 = nodesById.get(idOf0Branch);
         const node1 = nodesById.get(idOf1Branch);
         const node = {
-            l: level,
+            l: level, // level is first for prettier json output
             0: node0,
             1: node1
         };
@@ -10293,6 +10268,7 @@ async function optimizeBruteForce({ truthTable, iterations = Infinity, onBetterB
         truthTable,
         bdd: initialBdd
     };
+    onBetterBdd(currentBestResult);
     if (log) {
         initialBdd.log();
         console.log('initial nodes amount: ' + initialBdd.countNodes());
@@ -21103,7 +21079,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.resolveInput = exports.getSimpleBdd = exports.minimalBddString = void 0;
 const binary_decision_diagram_1 = require("binary-decision-diagram");
 const index_js_1 = require("../states/index.js");
-exports.minimalBddString = '14a2b0c/d1e,f+g5h.i4j*k-l)m(n6ohk1pdf1qef1rin-sjn-ton-ugn-vmn-whn-xkn-yln-zdf5{ef5|wx5}df7~dz7ef7¡bk7¢e{7£g|7¤ry7¥dp7¦gk7§eq7¨gt7©ac7ªmv7«gu7¬nm7­iy7®nw7¯¤s8°«¦8±¬k8²ªm8³®v8´«n8µ¬n8¶vm8·xv8¸mn8¹­j8º®m8»xm8¼­¹3½}~3¾©°3¿¢3À¡£3Ám±3Â®º3Ãmº3Ä©´3Åb®3Æmµ3Çm»3Èx»3Ékn3Êm¸3Ë¼j6ÌÂm6ÍÆÃ6ÎÈm6Ïnm6ÐÊÇ6ÑÌÎ,ÒÍÐ,ÓÅÉ,Ô²¶,Õ³·,Ö®n,×º»,Ømf9ÙËÁ9Úym9ÛmÏ9ÜÑÒ9Ýz{2Þpq2ß½¿2à¾À2á¥§2â°¨2ãÄÓ2ä´Ö2åÝn0æÞn0çØÛ0èÙÜ0éßn0êàã0ë²Ô0ì¯Õ0íán0îâä0ï¹×0ðçv/ñåæ/òçë/óèì/ôéí/õêî/öÚy/÷òm(øóï(ùöy(ú÷ø:ûôõ:ümù:ýðñ4þúû4ÿþý*Āüm*ÿĀ.';
+exports.minimalBddString = '14a1b,c+d2e5f0g/h.i4j*k-l)m(n6obh9pce9qnh9rad9scm9tae9uan9vbf9wbe9xbn9ycg9zck9{cn9|nd9}ne9~nf9ng9¡nm9¢nk9£mh9¤mi9¥mj9¦mk9§ml9¨mn9©mc8ª¤{8«¥z8¬¨s8­¨n8®mn8¯¨¡8°¨m8±pz7²ª«7³{z7´­®7µ}n7¶¤¥7·¨m7¸wo6¹µ}6ºnq6»²¬6¼tu6½wx6¾´¯6¿µn6À®¯6Á¶§6Â·£6Ã¶¨6Ä·¨6Åm¦6Æm¨6Ç¤¥5È¨m5Ém©4Êm®4ËÇ§4ÌÈ£4ÍÇ¬4ÎÃ»4ÏÈ¯4ÐÄ¾4Ñm¦4Òm¯4ÓÆÀ4Ôma3Õmn3ÖÉa3×Ên3ØËr3ÙÁt3ÚÌ|3ÛÂ¹3ÜÍr3ÝÎ¼3ÞÏ|3ßÐ¿3àØÙ2áv¸2ây±2ãÚÛ2ä~º2åµ2æÜÝ2çv½2èy³2éz{2êÞß2ë~n2ìn2íÑÅ2îÒÓ2ï¢n2ðÔb1ñÕn1òÖb1ó×n1ôàá1õâz1öãä1÷æç1øèé1ùêë1úðc0ûñn0üòc0ýón0þmn0ÿÊn0Āôõ0āöå0Ă÷ø0ăùì0Ąíï0ąîï0Ćúû/ćüý/ĈĀā/ĉĂă/ĊÁÂ/ċÃÄ/Čúm.čüm.ĎĆm.ďćm.Đþm.đÿm.ĒĀ§.ēĂ°.ĔĈ§.ĕĉ°.ĖĄ§.ėą°.ĘÁ§.ęÃ¨.ĚĊ§.ěċ¨.ĜÅ§.ĝÆ¨.ĞČč-ğĎď-ĠĐđ-ġĒē-ĢĔĕ-ģĖė-ĤĘę-ĥĚě-ĦĜĝ-ħğĠ,ĨĢģ,ĩĥĦ,ĪĞħ+īġĨ+ĬĤĩ+ĭĪī)ĭĬ(';
 let simpleBdd;
 function getSimpleBdd() {
     if (!simpleBdd) {
@@ -21246,7 +21222,6 @@ exports.orderedStateList = [
     'isFindOne',
     'hasSkip',
     'wasResultsEmpty',
-    'previousUnknown',
     'wasLimitReached',
     'wasFirst',
     'wasLast',
@@ -21267,7 +21242,6 @@ exports.stateResolveFunctions = {
     isFindOne: state_resolver_js_1.isFindOne,
     hasSkip: state_resolver_js_1.hasSkip,
     wasResultsEmpty: state_resolver_js_1.wasResultsEmpty,
-    previousUnknown: state_resolver_js_1.previousUnknown,
     wasLimitReached: state_resolver_js_1.wasLimitReached,
     wasFirst: state_resolver_js_1.wasFirst,
     wasLast: state_resolver_js_1.wasLast,
@@ -21288,18 +21262,17 @@ exports.stateResolveFunctionByIndex = {
     4: state_resolver_js_1.isFindOne,
     5: state_resolver_js_1.hasSkip,
     6: state_resolver_js_1.wasResultsEmpty,
-    7: state_resolver_js_1.previousUnknown,
-    8: state_resolver_js_1.wasLimitReached,
-    9: state_resolver_js_1.wasFirst,
-    10: state_resolver_js_1.wasLast,
-    11: state_resolver_js_1.sortParamsChanged,
-    12: state_resolver_js_1.wasInResult,
-    13: state_resolver_js_1.wasSortedBeforeFirst,
-    14: state_resolver_js_1.wasSortedAfterLast,
-    15: state_resolver_js_1.isSortedBeforeFirst,
-    16: state_resolver_js_1.isSortedAfterLast,
-    17: state_resolver_js_1.wasMatching,
-    18: state_resolver_js_1.doesMatchNow
+    7: state_resolver_js_1.wasLimitReached,
+    8: state_resolver_js_1.wasFirst,
+    9: state_resolver_js_1.wasLast,
+    10: state_resolver_js_1.sortParamsChanged,
+    11: state_resolver_js_1.wasInResult,
+    12: state_resolver_js_1.wasSortedBeforeFirst,
+    13: state_resolver_js_1.wasSortedAfterLast,
+    14: state_resolver_js_1.isSortedBeforeFirst,
+    15: state_resolver_js_1.isSortedAfterLast,
+    16: state_resolver_js_1.wasMatching,
+    17: state_resolver_js_1.doesMatchNow
 };
 function resolveState(stateName, input) {
     const fn = exports.stateResolveFunctions[stateName];
@@ -21330,7 +21303,7 @@ exports.logStateSet = logStateSet;
 },{"./state-resolver.js":417}],417:[function(require,module,exports){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.wasResultsEmpty = exports.doesMatchNow = exports.wasMatching = exports.isSortedAfterLast = exports.isSortedBeforeFirst = exports.wasSortedAfterLast = exports.wasSortedBeforeFirst = exports.wasLast = exports.wasFirst = exports.wasInResult = exports.sortParamsChanged = exports.wasLimitReached = exports.previousUnknown = exports.isUpdate = exports.isInsert = exports.isDelete = exports.hasSkip = exports.isFindOne = exports.hasLimit = void 0;
+exports.wasResultsEmpty = exports.doesMatchNow = exports.wasMatching = exports.isSortedAfterLast = exports.isSortedBeforeFirst = exports.wasSortedAfterLast = exports.wasSortedBeforeFirst = exports.wasLast = exports.wasFirst = exports.wasInResult = exports.sortParamsChanged = exports.wasLimitReached = exports.isUpdate = exports.isInsert = exports.isDelete = exports.hasSkip = exports.isFindOne = exports.hasLimit = void 0;
 const util_js_1 = require("../util.js");
 const hasLimit = (input) => {
     return !!input.queryParams.limit;
@@ -21361,10 +21334,6 @@ const isUpdate = (input) => {
     return input.changeEvent.operation === 'UPDATE';
 };
 exports.isUpdate = isUpdate;
-const previousUnknown = (input) => {
-    return input.changeEvent.previous === util_js_1.UNKNOWN_VALUE;
-};
-exports.previousUnknown = previousUnknown;
 const wasLimitReached = (input) => {
     return (0, exports.hasLimit)(input) && input.previousResults.length >= input.queryParams.limit;
 };
@@ -21376,7 +21345,7 @@ const sortParamsChanged = (input) => {
     if (!doc) {
         return false;
     }
-    if (!prev || prev === util_js_1.UNKNOWN_VALUE) {
+    if (!prev) {
         return true;
     }
     for (let i = 0; i < sortFields.length; i++) {
@@ -21431,7 +21400,7 @@ const wasLast = (input) => {
 exports.wasLast = wasLast;
 const wasSortedBeforeFirst = (input) => {
     const prev = input.changeEvent.previous;
-    if (!prev || prev === util_js_1.UNKNOWN_VALUE) {
+    if (!prev) {
         return false;
     }
     const first = input.previousResults[0];
@@ -21453,7 +21422,7 @@ const wasSortedBeforeFirst = (input) => {
 exports.wasSortedBeforeFirst = wasSortedBeforeFirst;
 const wasSortedAfterLast = (input) => {
     const prev = input.changeEvent.previous;
-    if (!prev || prev === util_js_1.UNKNOWN_VALUE) {
+    if (!prev) {
         return false;
     }
     const last = (0, util_js_1.lastOfArray)(input.previousResults);
@@ -21501,7 +21470,7 @@ const isSortedAfterLast = (input) => {
 exports.isSortedAfterLast = isSortedAfterLast;
 const wasMatching = (input) => {
     const prev = input.changeEvent.previous;
-    if (!prev || prev === util_js_1.UNKNOWN_VALUE) {
+    if (!prev) {
         return false;
     }
     return input.queryParams.queryMatcher(prev);
@@ -21524,8 +21493,7 @@ exports.wasResultsEmpty = wasResultsEmpty;
 },{"../util.js":418}],418:[function(require,module,exports){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getProperty = exports.isObject = exports.roundToTwoDecimals = exports.mergeSets = exports.ensureNotFalsy = exports.flatClone = exports.cloneMap = exports.objectToMap = exports.mapToObject = exports.replaceCharAt = exports.getSortFieldsOfQuery = exports.normalizeSortField = exports.tryToFillPreviousDoc = exports.shuffleArray = exports.randomOfArray = exports.lastOfArray = exports.UNKNOWN_VALUE = void 0;
-exports.UNKNOWN_VALUE = 'UNKNOWN';
+exports.getProperty = exports.isObject = exports.roundToTwoDecimals = exports.mergeSets = exports.ensureNotFalsy = exports.flatClone = exports.cloneMap = exports.objectToMap = exports.mapToObject = exports.replaceCharAt = exports.getSortFieldsOfQuery = exports.normalizeSortField = exports.shuffleArray = exports.randomOfArray = exports.lastOfArray = void 0;
 function lastOfArray(ar) {
     return ar[ar.length - 1];
 }
@@ -21541,31 +21509,6 @@ function shuffleArray(arr) {
     return arr.slice().sort(() => (Math.random() - 0.5));
 }
 exports.shuffleArray = shuffleArray;
-/**
- * if the previous doc-data is unknown,
- * try to get it from previous results
- * @mutate the changeEvent of input
- */
-function tryToFillPreviousDoc(input) {
-    const prev = input.changeEvent.previous;
-    if (prev === exports.UNKNOWN_VALUE) {
-        const id = input.changeEvent.id;
-        const primary = input.queryParams.primaryKey;
-        if (input.keyDocumentMap) {
-            const doc = input.keyDocumentMap.get(id);
-            if (doc) {
-                input.changeEvent.previous = doc;
-            }
-        }
-        else {
-            const found = input.previousResults.find(item => item[primary] === id);
-            if (found) {
-                input.changeEvent.previous = found;
-            }
-        }
-    }
-}
-exports.tryToFillPreviousDoc = tryToFillPreviousDoc;
 /**
  * normalizes sort-field
  * in: '-age'
