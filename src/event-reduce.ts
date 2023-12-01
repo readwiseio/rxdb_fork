@@ -16,16 +16,9 @@ import {
     wasResultsEmpty,
     wasInResult,
     wasSortedAfterLast,
-    previousUnknown,
     wasLimitReached,
     wasMatching,
     doesMatchNow,
-    wasFirst,
-    wasLast,
-    isSortedAfterLast,
-    wasSortedBeforeFirst,
-    isSortedBeforeFirst,
-    sortParamsChanged,
 } from 'event-reduce-js';
 import type {
     RxQuery,
@@ -149,7 +142,6 @@ function canFillResultSetFromLimitBuffer<RxDocumentType>(s: StateResolveFunction
         !isFindOne(s) && // if it's a findOne, we have no buffer and have to re-compute
         !hasSkip(s) && // we could potentially make skip queries work later, but for now ignore them -- too hard
         !wasResultsEmpty(s) && // this should never happen
-        !previousUnknown(s) && // we need to have had the prev result set
         wasLimitReached(s) && // if not, the event reducer shouldn't have a problem
         // any value of wasFirst(s), position is not relevant for this case, as wasInResults
         // any value of wasLast(s) , position is not relevant for this case, as wasInResults
@@ -163,58 +155,6 @@ function canFillResultSetFromLimitBuffer<RxDocumentType>(s: StateResolveFunction
         !doesMatchNow(s) // Limit buffer only cares rn when the changed doc was indeed removed (so no longer matching)
     );
 }
-
-function isBrokenSortedLimitCase<RxDocumentType>(s: StateResolveFunctionInput<RxDocumentType>) {
-    // The issue is specifically with limited, sorted lists having updated items moved to the top. See RW-33967.
-    return (
-        !isInsert(s) &&
-        isUpdate(s) &&
-        !isDelete(s) &&
-        hasLimit(s) &&
-        !isFindOne(s) &&
-        !hasSkip(s) &&
-        !wasResultsEmpty(s) &&
-        !previousUnknown(s) &&
-        // wasLimitReached(s) && // both of these was LimitReachedCases are bork.
-        !wasFirst(s) &&
-        !wasLast(s) &&
-        sortParamsChanged(s) &&
-        !wasInResult(s) &&
-        !wasSortedBeforeFirst(s) &&
-        wasSortedAfterLast(s) &&
-        isSortedBeforeFirst(s) &&
-        !isSortedAfterLast(s) &&
-        !wasMatching(s) &&
-        doesMatchNow(s)
-    );
-}
-
-function isBrokenSortedLimitCaseWithSkip<RxDocumentType>(s: StateResolveFunctionInput<RxDocumentType>) {
-    // The issue is specifically with limited, sorted lists having updated items moved to the top. See RW-33967.
-    return (
-        !isInsert(s) &&
-        isUpdate(s) &&
-        !isDelete(s) &&
-        hasLimit(s) &&
-        !isFindOne(s) &&
-        hasSkip(s) &&
-        !wasResultsEmpty(s) &&
-        !previousUnknown(s) &&
-        // wasLimitReached(s) && // both of these was LimitReachedCases are bork.
-        !wasFirst(s) &&
-        !wasLast(s) &&
-        sortParamsChanged(s) &&
-        !wasInResult(s) &&
-        !wasSortedBeforeFirst(s) &&
-        wasSortedAfterLast(s) &&
-        isSortedBeforeFirst(s) &&
-        !isSortedAfterLast(s) &&
-        !wasMatching(s) &&
-        doesMatchNow(s)
-    );
-}
-
-
 
 export function calculateNewResults<RxDocumentType>(
     rxQuery: RxQuery<RxDocumentType>,
@@ -267,29 +207,6 @@ export function calculateNewResults<RxDocumentType>(
                 }
                 return false;
             }
-            return true;
-        } else if (actionName === 'doNothing' && isBrokenSortedLimitCase(stateResolveFunctionInput)) {
-            changed = true;
-            runAction(
-                'removeLastInsertFirst',
-                queryParams,
-                eventReduceEvent,
-                previousResults,
-                previousResultsMap,
-            );
-            return false;
-        } else if (actionName === 'insertLast' && isBrokenSortedLimitCase(stateResolveFunctionInput)) {
-            changed = true;
-            runAction(
-                'insertFirst',
-                queryParams,
-                eventReduceEvent,
-                previousResults,
-                previousResultsMap,
-            );
-            return false;
-        } else if (actionName === 'doNothing' && isBrokenSortedLimitCaseWithSkip(stateResolveFunctionInput)) {
-            // We have to do a full re-exec of the query in this case with the skip:
             return true;
         } else if (actionName !== 'doNothing') {
             changed = true;
