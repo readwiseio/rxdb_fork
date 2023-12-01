@@ -97,6 +97,9 @@ function canFillResultSetFromLimitBuffer(s) {
   ;
 }
 
+function actionRemovesItemFromResults(action) {
+  return ['removeFirstItem', 'removeLastItem', 'removeExisting', 'runFullQueryAgain'].includes(action);
+}
 export function calculateNewResults(rxQuery, rxChangeEvents) {
   if (!rxQuery.collection.database.eventReduce) {
     return {
@@ -107,6 +110,7 @@ export function calculateNewResults(rxQuery, rxChangeEvents) {
   var previousResults = ensureNotFalsy(rxQuery._result).docsData.slice(0);
   var previousResultsMap = ensureNotFalsy(rxQuery._result).docsDataMap;
   var changed = false;
+  var limitResultsRemoved = false;
   var eventReduceEvents = rxChangeEvents.map(cE => rxChangeEventToEventReduceChangeEvent(cE)).filter(arrayFilterNotEmpty);
   var foundNonOptimizeable = eventReduceEvents.find(eventReduceEvent => {
     var stateResolveFunctionInput = {
@@ -137,6 +141,9 @@ export function calculateNewResults(rxQuery, rxChangeEvents) {
     } else if (actionName !== 'doNothing') {
       changed = true;
       runAction(actionName, queryParams, eventReduceEvent, previousResults, previousResultsMap);
+      if (actionRemovesItemFromResults(actionName)) {
+        limitResultsRemoved = true;
+      }
       return false;
     }
   });
@@ -148,7 +155,8 @@ export function calculateNewResults(rxQuery, rxChangeEvents) {
     return {
       runFullQueryAgain: false,
       changed,
-      newResults: previousResults
+      newResults: previousResults,
+      limitResultsRemoved
     };
   }
 }

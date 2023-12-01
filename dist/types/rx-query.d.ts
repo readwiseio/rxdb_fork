@@ -1,5 +1,9 @@
 import { BehaviorSubject, Observable } from 'rxjs';
-import type { RxCollection, RxDocument, RxQueryOP, RxQuery, MangoQuery, MangoQuerySortPart, MangoQuerySelector, PreparedQuery, RxDocumentWriteData, RxDocumentData, QueryMatcher } from './types';
+import type { MangoQuery, MangoQuerySelector, MangoQuerySortPart, PreparedQuery, QueryMatcher, RxCollection, RxDocument, RxDocumentData, RxDocumentWriteData, RxQuery, RxQueryOP } from './types';
+export interface QueryCacheBackend {
+    getItem<T extends string | string[]>(key: string): Promise<T | null>;
+    setItem<T extends string | string[]>(key: string, value: T): Promise<T>;
+}
 export declare class RxQueryBase<RxDocType, RxQueryResult = RxDocument<RxDocType>[] | RxDocument<RxDocType>> {
     op: RxQueryOP;
     mangoQuery: Readonly<MangoQuery<RxDocType>>;
@@ -22,6 +26,7 @@ export declare class RxQueryBase<RxDocType, RxQueryResult = RxDocument<RxDocType
     _result: {
         docsData: RxDocumentData<RxDocType>[];
         docsDataMap: Map<string, RxDocType>;
+        docsKeys: string[];
         docsMap: Map<string, RxDocument<RxDocType>>;
         docs: RxDocument<RxDocType>[];
         count: number;
@@ -39,6 +44,10 @@ export declare class RxQueryBase<RxDocType, RxQueryResult = RxDocument<RxDocType
     _lastExecEnd: number;
     _limitBufferSize: number | null;
     _limitBufferResults: RxDocumentData<RxDocType>[] | null;
+    _persistentQueryCacheResult?: string[] | string;
+    _persistentQueryCacheResultLwt?: string;
+    _persistentQueryCacheLoaded?: Promise<void>;
+    _persistentQueryCacheBackend?: QueryCacheBackend;
     /**
      * ensures that the exec-runs
      * are not run in parallel
@@ -79,6 +88,7 @@ export declare class RxQueryBase<RxDocType, RxQueryResult = RxDocument<RxDocType
      * @overwrites itself with the actual value
      */
     toString(): string;
+    persistentQueryId(): string;
     /**
      * returns the prepared query
      * which can be send to the storage instance to query for documents.
@@ -109,6 +119,8 @@ export declare class RxQueryBase<RxDocType, RxQueryResult = RxDocument<RxDocType
     skip(_amount: number | null): RxQuery<RxDocType, RxQueryResult>;
     limit(_amount: number | null): RxQuery<RxDocType, RxQueryResult>;
     enableLimitBuffer(bufferSize: number): this;
+    enablePersistentQueryCache(backend: QueryCacheBackend): this;
+    private _restoreQueryCacheFromPersistedState;
 }
 export declare function _getDefaultQuery<RxDocType>(): MangoQuery<RxDocType>;
 /**

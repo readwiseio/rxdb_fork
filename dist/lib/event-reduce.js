@@ -106,6 +106,9 @@ function canFillResultSetFromLimitBuffer(s) {
   ;
 }
 
+function actionRemovesItemFromResults(action) {
+  return ['removeFirstItem', 'removeLastItem', 'removeExisting', 'runFullQueryAgain'].includes(action);
+}
 function calculateNewResults(rxQuery, rxChangeEvents) {
   if (!rxQuery.collection.database.eventReduce) {
     return {
@@ -116,6 +119,7 @@ function calculateNewResults(rxQuery, rxChangeEvents) {
   var previousResults = (0, _utils.ensureNotFalsy)(rxQuery._result).docsData.slice(0);
   var previousResultsMap = (0, _utils.ensureNotFalsy)(rxQuery._result).docsDataMap;
   var changed = false;
+  var limitResultsRemoved = false;
   var eventReduceEvents = rxChangeEvents.map(cE => (0, _rxChangeEvent.rxChangeEventToEventReduceChangeEvent)(cE)).filter(_utils.arrayFilterNotEmpty);
   var foundNonOptimizeable = eventReduceEvents.find(eventReduceEvent => {
     var stateResolveFunctionInput = {
@@ -146,6 +150,9 @@ function calculateNewResults(rxQuery, rxChangeEvents) {
     } else if (actionName !== 'doNothing') {
       changed = true;
       (0, _eventReduceJs.runAction)(actionName, queryParams, eventReduceEvent, previousResults, previousResultsMap);
+      if (actionRemovesItemFromResults(actionName)) {
+        limitResultsRemoved = true;
+      }
       return false;
     }
   });
@@ -157,7 +164,8 @@ function calculateNewResults(rxQuery, rxChangeEvents) {
     return {
       runFullQueryAgain: false,
       changed,
-      newResults: previousResults
+      newResults: previousResults,
+      limitResultsRemoved
     };
   }
 }
