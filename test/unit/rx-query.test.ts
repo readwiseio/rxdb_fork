@@ -15,7 +15,7 @@ import {
     promiseWait,
     randomCouchString,
     ensureNotFalsy,
-    now,
+    now, uncacheRxQuery,
 } from '../../';
 
 import { firstValueFrom } from 'rxjs';
@@ -1829,6 +1829,45 @@ describe('rx-query.test.ts', () => {
             assert.strictEqual(query._execOverDatabaseCount, 1);
 
             collection.database.destroy();
+        });
+
+        it('gives correct limit results when items were removed', async () => {
+            const {collection} = await setUpPersistentQueryCacheCollection();
+            const human1 = schemaObjects.human('1', 30);
+            const human2 = schemaObjects.human('2', 40);
+            const human3 = schemaObjects.human('3', 50);
+            await collection.bulkInsert([human1, human2, human3]);
+
+            // wait 1 second so that not all docs are included in lwt
+            await new Promise((resolve) => {
+                setTimeout(resolve, 1000);
+                return;
+            });
+
+            // Cache a limited query:
+            const query = collection.find({ limit: 2, sort: [{age: 'asc'}], selector: { age: { $gt: 10 } } });
+            const cache = new Cache();
+            await query.enablePersistentQueryCache(cache);
+            const originalResults = await query.exec();
+            assert.deepStrictEqual(originalResults.map(h => h.passportId), ['1', '2']);
+
+            // Now, get into a state where that query is no longer in memory (eg new tab)
+            // (but, the query should still be persisted on disk)
+            uncacheRxQuery(collection._queryCache, query);
+            assert.strictEqual(cache.size, 2);
+
+            // while the query is not in memory, remove one of the items from the query results
+            await collection.find({selector: { passportId: '1'}}).update({
+                $set: {
+                    age: 1,
+                }
+            });
+
+            // now when we create the query again, it has no way of knowing how to fill the missing item
+            const queryAgain = collection.find({ limit: 2, sort: [{age: 'asc'}], selector: { age: { $gt: 10 } } });
+            await queryAgain.enablePersistentQueryCache(cache);
+            const updatedResults = await queryAgain.exec();
+            assert.deepStrictEqual(updatedResults.map(h => h.passportId), ['2', '3']);
         });
     });
 });
