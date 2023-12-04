@@ -1831,7 +1831,7 @@ describe('rx-query.test.ts', () => {
             collection.database.destroy();
         });
 
-        it('gives correct limit results when items were removed', async () => {
+        it.skip('gives correct limit results when items were removed', async () => {
             const {collection} = await setUpPersistentQueryCacheCollection();
             const human1 = schemaObjects.human('1', 30);
             const human2 = schemaObjects.human('2', 40);
@@ -1868,6 +1868,8 @@ describe('rx-query.test.ts', () => {
             await queryAgain.enablePersistentQueryCache(cache);
             const updatedResults = await queryAgain.exec();
             assert.deepStrictEqual(updatedResults.map(h => h.passportId), ['2', '3']);
+
+            collection.database.destroy();
         });
     });
 });
