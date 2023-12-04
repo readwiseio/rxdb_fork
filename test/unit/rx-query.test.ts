@@ -1831,7 +1831,7 @@ describe('rx-query.test.ts', () => {
             collection.database.destroy();
         });
 
-        it.skip('gives correct limit results when items were removed', async () => {
+        it('gives correct limit results when items were removed', async () => {
             const {collection} = await setUpPersistentQueryCacheCollection();
             const human1 = schemaObjects.human('1', 30);
             const human2 = schemaObjects.human('2', 40);
@@ -1865,10 +1865,14 @@ describe('rx-query.test.ts', () => {
 
             // now when we create the query again, it has no way of knowing how to fill the missing item
             const queryAgain = collection.find({ limit: 2, sort: [{age: 'asc'}], selector: { age: { $gt: 10 } } });
+            assert.strictEqual(queryAgain._execOverDatabaseCount, 0);
+
             await queryAgain.enablePersistentQueryCache(cache);
             const updatedResults = await queryAgain.exec();
-            assert.deepStrictEqual(updatedResults.map(h => h.passportId), ['2', '3']);
 
+            // We must re-exec the query to make it correct.
+            assert.strictEqual(queryAgain._execOverDatabaseCount, 1);
+            assert.deepStrictEqual(updatedResults.map(h => h.passportId), ['2', '3']);
             collection.database.destroy();
         });
     });

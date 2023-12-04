@@ -576,14 +576,28 @@ export class RxQueryBase<
             );
 
             for (const changedDoc of changedDocs) {
-              /*
-               * no need to fetch again, we already got the doc from the list of changed docs, and therefore we filter
-               * deleted docs as well
-               */
-              persistedQueryCacheIds.delete(changedDoc[primaryPath] as string);
+              const docWasInOldPersistedResults = persistedQueryCacheIds.has(changedDoc[primaryPath] as string);
+              const docMatchesNow = this.doesDocumentDataMatch(changedDoc);
+
+              if (docWasInOldPersistedResults && !docMatchesNow && this.mangoQuery.limit) {
+                // Unfortunately if any doc was removed from the results since the last result,
+                // there is no way for us to be sure our calculated results are correct.
+                // So we should simply give up and re-exec the query.
+                this._persistentQueryCacheResult = value ?? undefined;
+                this._persistentQueryCacheResultLwt = lwt ?? undefined;
+                return;
+              }
+
+              if (docWasInOldPersistedResults) {
+                /*
+                * no need to fetch again, we already got the doc from the list of changed docs, and therefore we filter
+                * deleted docs as well
+                */
+                persistedQueryCacheIds.delete(changedDoc[primaryPath] as string);
+              }
 
               // ignore deleted docs or docs that do not match the query
-              if (!this.doesDocumentDataMatch(changedDoc)) {
+              if (!docMatchesNow) {
                 continue;
               }
 
