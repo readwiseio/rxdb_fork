@@ -1784,7 +1784,7 @@ describe('rx-query.test.ts', () => {
 
             // fill cache
             const cache = new Cache();
-            const query1 = collection.find({});
+            const query1 = collection.find({limit: 1});
             query1.enablePersistentQueryCache(cache);
             const queryId = query1.persistentQueryId();
 
@@ -1798,14 +1798,11 @@ describe('rx-query.test.ts', () => {
             const lwt = now() - 7200 * 1000; // go back in time (2hrs)
             await cache.setItem(`qc:${queryId}:lwt`, `${lwt}`);
 
-            const query2 = collection.find({});
+            const query2 = collection.find({limit: 1});
             query2.enablePersistentQueryCache(cache);
             await query2._persistentQueryCacheLoaded;
 
-            await result1[0].modify(data => {
-              data.age = 40;
-              return data;
-            });
+            await result1[0].remove();
 
             await query2.exec();
 
