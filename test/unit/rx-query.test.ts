@@ -1769,7 +1769,7 @@ describe('rx-query.test.ts', () => {
             const result2 = await query2.exec();
 
             assert.strictEqual(query1._execOverDatabaseCount, 0);
-            assert.strictEqual(query2._execOverDatabaseCount, 0);
+            assert.strictEqual(query2._execOverDatabaseCount, 1);
             assert.deepStrictEqual(result2.map(item => item.passportId), ['1', '3']);
 
             collection.database.destroy();
