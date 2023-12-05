@@ -521,6 +521,10 @@ export class RxQueryBase<
     }
 
     enablePersistentQueryCache(backend: QueryCacheBackend) {
+        if (this._persistentQueryCacheBackend) {
+            // We've already tried to enable the query cache
+            return this;
+        }
         this._persistentQueryCacheBackend = backend;
         this._persistentQueryCacheLoaded = this._restoreQueryCacheFromPersistedState();
         return this;
@@ -545,9 +549,12 @@ export class RxQueryBase<
         const persistentQueryId = this.persistentQueryId();
         const value = await this._persistentQueryCacheBackend.getItem<string[] | string>(`qc:${persistentQueryId}`);
         if (!value) {
-          return;
+            // eslint-disable-next-line no-console
+            console.log(`no persistent query cache found in the backend, returning early ${this.toString()}`);
+            return;
         }
-
+        // eslint-disable-next-line no-console
+        console.time(`Restoring persistent querycache ${this.toString()}`);
         const lwt = (await this._persistentQueryCacheBackend.getItem(`qc:${persistentQueryId}:lwt`)) as string | null;
         const primaryPath = this.collection.schema.primaryPath;
 
@@ -569,14 +576,28 @@ export class RxQueryBase<
             );
 
             for (const changedDoc of changedDocs) {
-              /*
-               * no need to fetch again, we already got the doc from the list of changed docs, and therefore we filter
-               * deleted docs as well
-               */
-              persistedQueryCacheIds.delete(changedDoc[primaryPath] as string);
+              const docWasInOldPersistedResults = persistedQueryCacheIds.has(changedDoc[primaryPath] as string);
+              const docMatchesNow = this.doesDocumentDataMatch(changedDoc);
+
+              if (docWasInOldPersistedResults && !docMatchesNow && this.mangoQuery.limit) {
+                // Unfortunately if any doc was removed from the results since the last result,
+                // there is no way for us to be sure our calculated results are correct.
+                // So we should simply give up and re-exec the query.
+                this._persistentQueryCacheResult = value ?? undefined;
+                this._persistentQueryCacheResultLwt = lwt ?? undefined;
+                return;
+              }
+
+              if (docWasInOldPersistedResults) {
+                /*
+                * no need to fetch again, we already got the doc from the list of changed docs, and therefore we filter
+                * deleted docs as well
+                */
+                persistedQueryCacheIds.delete(changedDoc[primaryPath] as string);
+              }
 
               // ignore deleted docs or docs that do not match the query
-              if (!this.doesDocumentDataMatch(changedDoc)) {
+              if (!docMatchesNow) {
                 continue;
               }
 
@@ -632,6 +653,9 @@ export class RxQueryBase<
             this._latestChangeEvent = this.collection._changeEventBuffer.counter;
             this._setResultData(Number(value));
         }
+        // eslint-disable-next-line no-console
+        console.timeEnd(`Restoring persistent querycache ${this.toString()}`);
+
     }
 }
 
