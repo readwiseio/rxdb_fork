@@ -541,8 +541,8 @@ export class RxQueryBase<
             return;
         }
 
-        if (this.mangoQuery.skip) {
-            console.error('The persistent query cache only works on non-skip queries.');
+        if (this.mangoQuery.skip || this.op === 'count') {
+            console.error('The persistent query cache only works on non-skip, non-count queries.');
             return;
         }
 
@@ -647,11 +647,6 @@ export class RxQueryBase<
             this._lastEnsureEqual = now();
             this._latestChangeEvent = this.collection._changeEventBuffer.counter;
             this._setResultData(docsData);
-        } else if (value && Number.isInteger(Number(value))) {
-            // get query into the correct state
-            this._lastEnsureEqual = now();
-            this._latestChangeEvent = this.collection._changeEventBuffer.counter;
-            this._setResultData(Number(value));
         }
         // eslint-disable-next-line no-console
         console.timeEnd(`Restoring persistent querycache ${this.toString()}`);
@@ -805,7 +800,6 @@ async function __ensureEqual<RxDocType>(rxQuery: RxQueryBase<RxDocType>): Promis
                 if (newCount !== previousCount) {
                     ret = true; // true because results changed
                     rxQuery._setResultData(newCount as any);
-                    await updatePersistentQueryCache(rxQuery);
                 }
             } else {
                 // 'find' or 'findOne' query
@@ -885,12 +879,8 @@ async function updatePersistentQueryCache<RxDocType>(rxQuery: RxQueryBase<RxDocT
 
     const backend = rxQuery._persistentQueryCacheBackend;
 
-    const isCount = rxQuery._result?.docs.length === 0 && rxQuery._result.count > 0;
-
     const key = rxQuery.persistentQueryId();
-    const value = isCount
-        ? rxQuery._result?.count?.toString() ?? '0'
-        : rxQuery._result?.docsKeys ?? [];
+    const value = rxQuery._result?.docsKeys ?? [];
 
     // update _persistedQueryCacheResult
     rxQuery._persistentQueryCacheResult = value;
