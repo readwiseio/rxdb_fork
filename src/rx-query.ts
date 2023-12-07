@@ -555,7 +555,13 @@ export class RxQueryBase<
         }
         // eslint-disable-next-line no-console
         console.time(`Restoring persistent querycache ${this.toString()}`);
-        const lwt = (await this._persistentQueryCacheBackend.getItem(`qc:${persistentQueryId}:lwt`)) as string | null;
+
+        const results = await Promise.all([
+            this._persistentQueryCacheBackend.getItem(`qc:${persistentQueryId}:lwt`),
+            this._persistentQueryCacheBackend.getItem(`qc:${persistentQueryId}:lb`),
+        ]);
+        const [lwt, limitBufferIds] = [results[0] as string | null, results[1] as string[] | null];
+
         const primaryPath = this.collection.schema.primaryPath;
 
         this._persistentQueryCacheResult = value ?? undefined;
@@ -610,7 +616,9 @@ export class RxQueryBase<
 
             // fetch remaining persisted doc ids
             const nonRestoredDocIds: string[] = [];
-            for (const docId of persistedQueryCacheIds) {
+
+            const moreDocIdsToConsider = Array.from(persistedQueryCacheIds).concat(limitBufferIds ?? []);
+            for (const docId of moreDocIdsToConsider) {
                 // first try to fill from docCache
                 const docData = this.collection._docCache.getLatestDocumentDataIfExists(docId);
                 if (docData && this.doesDocumentDataMatch(docData)) {
@@ -636,17 +644,24 @@ export class RxQueryBase<
               this.mangoQuery
             );
             const sortComparator = getSortComparator(this.collection.schema.jsonSchema, normalizedMangoQuery);
-            const skip = normalizedMangoQuery.skip ? normalizedMangoQuery.skip : 0;
             const limit = normalizedMangoQuery.limit ? normalizedMangoQuery.limit : Infinity;
-            const skipPlusLimit = skip + limit;
             docsData = docsData.sort(sortComparator);
-            docsData = docsData.slice(skip, skipPlusLimit);
 
+            const pastLimitItems = docsData.slice(limit);
+            const finalResults = docsData.slice(0, limit);
+
+            // Restore the limit buffer, if we can:
+            if (pastLimitItems && limitBufferIds?.length) {
+                const lastLimitBufferIndex = pastLimitItems.findLastIndex((d) => limitBufferIds.includes(d[primaryPath] as string));
+                if (lastLimitBufferIndex > 0) {
+                    this._limitBufferResults = pastLimitItems.slice(0, lastLimitBufferIndex + 1);
+                }
+            }
 
             // get query into the correct state
             this._lastEnsureEqual = now();
             this._latestChangeEvent = this.collection._changeEventBuffer.counter;
-            this._setResultData(docsData);
+            this._setResultData(finalResults);
         }
         // eslint-disable-next-line no-console
         console.timeEnd(`Restoring persistent querycache ${this.toString()}`);
@@ -889,8 +904,18 @@ async function updatePersistentQueryCache<RxDocType>(rxQuery: RxQueryBase<RxDocT
     console.time(`Query persistence: persisting results of ${JSON.stringify(rxQuery.mangoQuery)}`);
     // persist query cache
     const lwt = rxQuery._result?.time ?? RX_META_LWT_MINIMUM;
-    await backend.setItem(`qc:${String(key)}`, value);
-    await backend.setItem(`qc:${String(key)}:lwt`, lwt.toString());
+
+    const promises = [
+        backend.setItem(`qc:${String(key)}`, value),
+        backend.setItem(`qc:${String(key)}:lwt`, lwt.toString()),
+    ];
+
+    if (rxQuery._limitBufferResults) {
+        const limitBufferIds = rxQuery._limitBufferResults.map((d) => d[rxQuery.collection.schema.primaryPath] as string);
+        promises.push(backend.setItem(`qc:${String(key)}:lb`, limitBufferIds));
+    }
+
+    await Promise.all(promises);
 
     // eslint-disable-next-line no-console
     console.timeEnd(`Query persistence: persisting results of ${JSON.stringify(rxQuery.mangoQuery)}`);
