@@ -150,6 +150,15 @@ export async function startReplicationDownstream<RxDocType, CheckpointType = any
      */
     let lastTimeMasterChangesRequested: number = -1;
     async function downstreamResyncOnce() {
+        if (state.input.forkInstance.options.deferReplication) {
+            await new Promise((resolve) => {
+                // eslint-disable-next-line no-console
+                console.debug(`RxDB: defer downstream replication for ${state.input.forkInstance.collectionName} by ${state.input.forkInstance.options.deferReplication}ms`);
+                setTimeout(resolve, state.input.forkInstance.options.deferReplication);
+            });
+        }
+        // eslint-disable-next-line no-console
+        console.time(`RxDB: downstream replication ${state.input.forkInstance.collectionName}`);
         state.stats.down.downstreamResyncOnce = state.stats.down.downstreamResyncOnce + 1;
         if (state.events.canceled.getValue()) {
             return;
@@ -191,6 +200,8 @@ export async function startReplicationDownstream<RxDocType, CheckpointType = any
 
         }
         await Promise.all(promises);
+        // eslint-disable-next-line no-console
+        console.timeEnd(`RxDB: downstream replication ${state.input.forkInstance.collectionName}`);
     }
 
 
