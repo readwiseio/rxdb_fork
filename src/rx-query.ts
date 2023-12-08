@@ -649,18 +649,21 @@ export class RxQueryBase<
             const pastLimitItems = docsData.slice(limit);
             const finalResults = docsData.slice(0, limit);
 
-            // Restore the limit buffer, if we can:
-            if (pastLimitItems && limitBufferIds?.length) {
+            // If we had a limit buffer before, and now we don't... it means the limit buffer was exhausted.
+            // To be confident we're not missing anything, we need to re-exec the query:
+            if (limitBufferIds?.length && pastLimitItems.length === 0) {
+                this._persistentQueryCacheResult = value ?? undefined;
+                this._persistentQueryCacheResultLwt = lwt ?? undefined;
+                return;
+            }
+            // If there are still items past the first LIMIT items, try to restore the limit buffer with them:
+            if (limitBufferIds?.length && pastLimitItems.length > 0) {
                 const lastLimitBufferIndex = pastLimitItems.findLastIndex((d) => limitBufferIds.includes(d[primaryPath] as string));
-                if (lastLimitBufferIndex === -1) {
-                    // We had a limit buffer before, now we don't. This means it was an exhausted,
-                    // and to be confident we're not missing anyhing, we need to re-exec the query:
-                    this._persistentQueryCacheResult = value ?? undefined;
-                    this._persistentQueryCacheResultLwt = lwt ?? undefined;
-                    return;
-                } else {
+                if (lastLimitBufferIndex !== -1){
                     // If the limit buffer still has room, simply restore it:
                     this._limitBufferResults = pastLimitItems.slice(0, Math.max(lastLimitBufferIndex + 1, this._limitBufferSize ?? 0));
+                } else {
+                    this._limitBufferResults = [];
                 }
             }
 

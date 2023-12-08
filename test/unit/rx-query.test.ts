@@ -1954,6 +1954,42 @@ describe('rx-query.test.ts', () => {
                 collection.database.destroy();
             });
 
+            it('limit buffer enabled, with a bunch of deletions', async () => {
+                const { collection, query, cache} = await setUpLimitBufferSituation();
+
+                // Persist WITH the limit buffer enabled
+                query.enableLimitBuffer(3).enablePersistentQueryCache(cache);
+                await query.exec();
+                uncacheRxQuery(collection._queryCache, query);
+
+                // delete one item from the results, and one item from the limit buffer:
+                await collection.find({ selector: { passportId: '1' } }).remove();
+                await collection.find({ selector: { passportId: '3' } }).remove();
+
+                const queryAgain = collection.find(query.mangoQuery);
+                queryAgain.enableLimitBuffer(3).enablePersistentQueryCache(cache);
+
+                const updatedResults = await queryAgain.exec();
+
+                // The query should be able to fill up from the limit buffer
+                assert.strictEqual(queryAgain._execOverDatabaseCount, 0);
+                assert.deepStrictEqual(updatedResults.map(h => h.passportId), ['2', '4']);
+                assert.strictEqual(queryAgain._limitBufferResults?.length, 1);
+
+                // But if we go further, and use the last item from the limit buffer, we'll have to re-exec:
+                uncacheRxQuery(collection._queryCache, queryAgain);
+                await collection.find({ selector: { passportId: '4' } }).remove();
+
+                const queryFinal = collection.find(query.mangoQuery);
+                queryFinal.enableLimitBuffer(3).enablePersistentQueryCache(cache);
+
+                const finalResults = await queryFinal.exec();
+                assert.strictEqual(queryFinal._execOverDatabaseCount, 1);
+                assert.deepStrictEqual(finalResults.map(h => h.passportId), ['2', '5']);
+
+                collection.database.destroy();
+            });
+
             it('limit buffer enabled, doc added and limit buffer items changed, still restores correctly', async () => {
                 const { collection, query, cache} = await setUpLimitBufferSituation();
 
@@ -1995,6 +2031,41 @@ describe('rx-query.test.ts', () => {
 
                 // The two items in limit buffer should be in the correct order:
                 assert.deepStrictEqual(queryAgain._limitBufferResults?.map((d) => d.passportId), ['5', '3']);
+
+                collection.database.destroy();
+            });
+
+            it('limit buffer enabled, all items in buffer used but we have more non-buffer items', async () => {
+                const { collection, query, cache} = await setUpLimitBufferSituation();
+
+                // Persist WITH the limit buffer enabled
+                query.enableLimitBuffer(2).enablePersistentQueryCache(cache);
+                await query.exec();
+                uncacheRxQuery(collection._queryCache, query);
+
+                // remove the 2 results, so we use up the 2 items in the limit buffer:
+                await collection.find({ selector: { passportId: '1' } }).remove();
+                await collection.find({ selector: { passportId: '2' } }).update({
+                    $set: { age: 1 }
+                });
+                // But also add in some new docs, that match the filter but are sorted last
+                await collection.bulkUpsert([
+                    schemaObjects.human('6', 90),
+                    schemaObjects.human('7', 90),
+                ]);
+
+                const queryAgain = collection.find(query.mangoQuery);
+                queryAgain.enableLimitBuffer(2).enablePersistentQueryCache(cache);
+
+                const updatedResults = await queryAgain.exec();
+
+                // In this case we can use the limit buffer without re-execing, and still get correct results:
+                assert.strictEqual(queryAgain._execOverDatabaseCount, 0);
+                assert.deepStrictEqual(updatedResults.map(h => h.passportId), ['3', '4']);
+
+                // But the new limit buffer will be empty -- we can't use the new documents because we don't know
+                // how they would be sorted relative to other documents
+                assert.strictEqual(queryAgain._limitBufferResults?.length, 0);
 
                 collection.database.destroy();
             });
