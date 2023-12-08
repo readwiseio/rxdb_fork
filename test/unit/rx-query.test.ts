@@ -15,7 +15,7 @@ import {
     promiseWait,
     randomCouchString,
     ensureNotFalsy,
-    now, uncacheRxQuery,
+    now, uncacheRxQuery, RxCollection,
 } from '../../';
 
 import { firstValueFrom } from 'rxjs';
@@ -1854,6 +1854,11 @@ describe('rx-query.test.ts', () => {
                 return { query, cache, collection };
             }
 
+            function simulateNewSession(collection: RxCollection) {
+                clearQueryCache(collection);
+                collection._docCache.cacheItemByDocId.clear();
+            }
+
             // This is how it should operate when we don't persist limit buffers:
             it('limit buffer not enabled, still gives correct results through re-execution', async () => {
                 const { collection, query, cache} = await setUpLimitBufferSituation();
@@ -1865,7 +1870,7 @@ describe('rx-query.test.ts', () => {
 
                 // Now, get into a state where that query is no longer in memory (eg new tab)
                 // (but, the query should still be persisted on disk)
-                uncacheRxQuery(collection._queryCache, query);
+                simulateNewSession(collection);
                 assert.strictEqual(cache.size, 2);
 
                 // while the query is not in memory, remove one of the items from the query results
@@ -1886,7 +1891,41 @@ describe('rx-query.test.ts', () => {
                 collection.database.destroy();
             });
 
-            it('limit buffer enabled, restores changed results correctly with no re-exec', async () => {
+            it('limit buffer enabled, restores normal changes, results correctly with no re-exec', async () => {
+                const { collection, query, cache} = await setUpLimitBufferSituation();
+
+                // Persist WITH the limit buffer enabled
+                query.enableLimitBuffer(5).enablePersistentQueryCache(cache);
+
+                const originalResults = await query.exec();
+                assert.deepStrictEqual(originalResults.map(h => h.passportId), ['1', '2']);
+                assert.strictEqual(query._limitBufferResults?.length, 3);
+                assert.strictEqual(cache.size, 3);
+
+                // remove one of the items from the query results
+                await collection.find({ selector: { passportId: '1' } }).update({
+                    $set: { age: 1 }
+                });
+
+                simulateNewSession(collection);
+
+                // now when we create the query again, it should fill in the missing element from the limit buffer
+                const queryAgain = collection.find(query.mangoQuery);
+                queryAgain.enableLimitBuffer(5).enablePersistentQueryCache(cache);
+
+                const updatedResults = await queryAgain.exec();
+
+                // The query should use the limit buffer to restore the results, and not need to re-exec the query
+                assert.strictEqual(queryAgain._execOverDatabaseCount, 0);
+                assert.deepStrictEqual(updatedResults.map(h => h.passportId), ['2', '3']);
+
+                // There should now only be 2 items left in the limit buffer, it used the first one up to fill the results
+                assert.strictEqual(queryAgain._limitBufferResults?.length, 2);
+
+                collection.database.destroy();
+            });
+
+            it('limit buffer enabled, restores missing changes, results correctly with no re-exec', async () => {
                 const { collection, query, cache} = await setUpLimitBufferSituation();
 
                 // Persist WITH the limit buffer enabled
@@ -1896,10 +1935,11 @@ describe('rx-query.test.ts', () => {
                 assert.deepStrictEqual(originalResults.map(h => h.passportId), ['1', '2']);
                 assert.strictEqual(query._limitBufferResults?.length, 3);
 
-                uncacheRxQuery(collection._queryCache, query);
+                // uncache the query first, before changes are made
+                simulateNewSession(collection);
                 assert.strictEqual(cache.size, 3);
 
-                // remove one of the items from the query results
+                // remove one of the items from the query results while query is not listening in memory
                 await collection.find({ selector: { passportId: '1' } }).update({
                     $set: { age: 1 }
                 });
@@ -1926,7 +1966,7 @@ describe('rx-query.test.ts', () => {
                 // Persist WITH the limit buffer enabled, but only one doc
                 query.enableLimitBuffer(1).enablePersistentQueryCache(cache);
                 await query.exec();
-                uncacheRxQuery(collection._queryCache, query);
+                simulateNewSession(collection);
 
                 // remove two of the items from the query results
                 await collection.find({ selector: { passportId: '1' } }).update({
@@ -1960,7 +2000,7 @@ describe('rx-query.test.ts', () => {
                 // Persist WITH the limit buffer enabled
                 query.enableLimitBuffer(3).enablePersistentQueryCache(cache);
                 await query.exec();
-                uncacheRxQuery(collection._queryCache, query);
+                simulateNewSession(collection);
 
                 // delete one item from the results, and one item from the limit buffer:
                 await collection.find({ selector: { passportId: '1' } }).remove();
@@ -1998,7 +2038,7 @@ describe('rx-query.test.ts', () => {
 
                 await query.exec();
 
-                uncacheRxQuery(collection._queryCache, query);
+                simulateNewSession(collection);
 
                 // Let's make 3 changes:
                 // 1. remove both of the original results
@@ -2035,13 +2075,13 @@ describe('rx-query.test.ts', () => {
                 collection.database.destroy();
             });
 
-            it('limit buffer enabled, all items in buffer used but we have more non-buffer items', async () => {
+            it('limit buffer enabled, all items in buffer used but we have more matching non-buffer items', async () => {
                 const { collection, query, cache} = await setUpLimitBufferSituation();
 
                 // Persist WITH the limit buffer enabled
                 query.enableLimitBuffer(2).enablePersistentQueryCache(cache);
                 await query.exec();
-                uncacheRxQuery(collection._queryCache, query);
+                simulateNewSession(collection);
 
                 // remove the 2 results, so we use up the 2 items in the limit buffer:
                 await collection.find({ selector: { passportId: '1' } }).remove();

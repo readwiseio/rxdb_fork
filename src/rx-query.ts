@@ -595,6 +595,14 @@ export class RxQueryBase<
                 return;
               }
 
+              if (docWasInOldPersistedResults) {
+                /*
+                * no need to fetch again, we already got the doc from the list of changed docs, and therefore we filter
+                * out docs that are no longer matching the query.
+                */
+                persistedQueryCacheIds.delete(changedDoc[primaryPath] as string);
+              }
+
               // ignore deleted docs or docs that do not match the query
               if (!docMatchesNow) {
                 continue;
@@ -631,11 +639,13 @@ export class RxQueryBase<
 
             // otherwise get from storage
             if (nonRestoredDocIds.length > 0) {
-              const docsMap = await this.collection.storageInstance.findDocumentsById(nonRestoredDocIds, false);
-              Object.values(docsMap).forEach(docData => {
-                this.collection._docCache.getCachedRxDocument(docData);
-                docsData.push(docData);
-              });
+                const docsMap = await this.collection.storageInstance.findDocumentsById(nonRestoredDocIds, false);
+                Object.values(docsMap).forEach(docData => {
+                    if (this.doesDocumentDataMatch(docData)) {
+                        this.collection._docCache.getCachedRxDocument(docData);
+                        docsData.push(docData);
+                    }
+                });
             }
 
             const normalizedMangoQuery = normalizeMangoQuery<RxDocType>(
