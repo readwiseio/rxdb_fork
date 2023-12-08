@@ -572,6 +572,7 @@ export class RxQueryBase<
             const persistedQueryCacheIds = new Set(this._persistentQueryCacheResult);
 
             let docsData: RxDocumentData<RxDocType>[] = [];
+            const changedDocIds: Set<string> = new Set();
 
             // query all docs updated > last persisted, limit to an arbitrary 1_000_000 (10x of what we consider our largest library)
             const {documents: changedDocs} = await this.collection.storageInstance.getChangedDocumentsSince(
@@ -585,21 +586,13 @@ export class RxQueryBase<
               const docWasInOldPersistedResults = persistedQueryCacheIds.has(changedDoc[primaryPath] as string);
               const docMatchesNow = this.doesDocumentDataMatch(changedDoc);
 
-              if (docWasInOldPersistedResults && !docMatchesNow && this.mangoQuery.limit) {
+              if (docWasInOldPersistedResults && !docMatchesNow && this.mangoQuery.limit && !limitBufferIds?.length) {
                 // Unfortunately if any doc was removed from the results since the last result,
                 // there is no way for us to be sure our calculated results are correct.
                 // So we should simply give up and re-exec the query.
                 this._persistentQueryCacheResult = value ?? undefined;
                 this._persistentQueryCacheResultLwt = lwt ?? undefined;
                 return;
-              }
-
-              if (docWasInOldPersistedResults) {
-                /*
-                * no need to fetch again, we already got the doc from the list of changed docs, and therefore we filter
-                * deleted docs as well
-                */
-                persistedQueryCacheIds.delete(changedDoc[primaryPath] as string);
               }
 
               // ignore deleted docs or docs that do not match the query
@@ -612,13 +605,19 @@ export class RxQueryBase<
 
               // add to docs
               docsData.push(changedDoc);
+              changedDocIds.add(changedDoc[primaryPath] as string);
             }
 
-            // fetch remaining persisted doc ids
-            const nonRestoredDocIds: string[] = [];
+            // Get the rest of the doc ids we need to consider:
+            const moreDocIdsToConsider = new Set(Array.from(persistedQueryCacheIds).concat(limitBufferIds ?? []));
 
-            const moreDocIdsToConsider = Array.from(persistedQueryCacheIds).concat(limitBufferIds ?? []);
+            const nonRestoredDocIds: string[] = [];
             for (const docId of moreDocIdsToConsider) {
+                if (changedDocIds.has(docId)) {
+                    // we already fetched this doc because it changed, don't get it again
+                    continue;
+                }
+
                 // first try to fill from docCache
                 const docData = this.collection._docCache.getLatestDocumentDataIfExists(docId);
                 if (docData && this.doesDocumentDataMatch(docData)) {
@@ -653,8 +652,15 @@ export class RxQueryBase<
             // Restore the limit buffer, if we can:
             if (pastLimitItems && limitBufferIds?.length) {
                 const lastLimitBufferIndex = pastLimitItems.findLastIndex((d) => limitBufferIds.includes(d[primaryPath] as string));
-                if (lastLimitBufferIndex > 0) {
-                    this._limitBufferResults = pastLimitItems.slice(0, lastLimitBufferIndex + 1);
+                if (lastLimitBufferIndex === -1) {
+                    // We had a limit buffer before, now we don't. This means it was an exhausted,
+                    // and to be confident we're not missing anyhing, we need to re-exec the query:
+                    this._persistentQueryCacheResult = value ?? undefined;
+                    this._persistentQueryCacheResultLwt = lwt ?? undefined;
+                    return;
+                } else {
+                    // If the limit buffer still has room, simply restore it:
+                    this._limitBufferResults = pastLimitItems.slice(0, Math.max(lastLimitBufferIndex + 1, this._limitBufferSize ?? 0));
                 }
             }
 
@@ -909,7 +915,6 @@ async function updatePersistentQueryCache<RxDocType>(rxQuery: RxQueryBase<RxDocT
         backend.setItem(`qc:${String(key)}`, value),
         backend.setItem(`qc:${String(key)}:lwt`, lwt.toString()),
     ];
-
     if (rxQuery._limitBufferResults) {
         const limitBufferIds = rxQuery._limitBufferResults.map((d) => d[rxQuery.collection.schema.primaryPath] as string);
         promises.push(backend.setItem(`qc:${String(key)}:lb`, limitBufferIds));

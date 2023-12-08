@@ -1,6 +1,8 @@
 import './unit/init.test';
 import './unit/util.test';
 
+import './unit/rx-query.test';
+
 
 /**
  * Helpers that
@@ -36,7 +38,6 @@ import './unit/validate.test';
 import './unit/attachments.test';
 import './unit/attachments-compression.test';
 import './unit/encryption.test';
-import './unit/rx-query.test';
 import './unit/cross-instance.test';
 import './unit/local-documents.test';
 import './unit/change-event-buffer.test';
