@@ -1831,7 +1831,7 @@ describe('rx-query.test.ts', () => {
             collection.database.destroy();
         });
 
-        describe.only('persisting queries with limit buffers', () => {
+        describe('persisting queries with limit buffers', () => {
             async function setUpLimitBufferSituation() {
                 const {collection} = await setUpPersistentQueryCacheCollection();
                 await collection.bulkInsert([
