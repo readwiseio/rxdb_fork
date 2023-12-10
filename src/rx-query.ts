@@ -548,7 +548,7 @@ export class RxQueryBase<
 
         const persistentQueryId = this.persistentQueryId();
         const value = await this._persistentQueryCacheBackend.getItem<string[] | string>(`qc:${persistentQueryId}`);
-        if (!value) {
+        if (!value || !Array.isArray(value) || value.length === 0) {
             // eslint-disable-next-line no-console
             console.log(`no persistent query cache found in the backend, returning early ${this.toString()}`);
             return;
@@ -567,121 +567,119 @@ export class RxQueryBase<
         this._persistentQueryCacheResult = value ?? undefined;
         this._persistentQueryCacheResultLwt = lwt ?? undefined;
 
-        // if this is a regular query, also load documents into cache
-        if (Array.isArray(value) && value.length > 0) {
-            const persistedQueryCacheIds = new Set(this._persistentQueryCacheResult);
+        const persistedQueryCacheIds = new Set(this._persistentQueryCacheResult);
 
-            let docsData: RxDocumentData<RxDocType>[] = [];
-            const changedDocIds: Set<string> = new Set();
+        let docsData: RxDocumentData<RxDocType>[] = [];
+        const changedDocIds: Set<string> = new Set();
 
-            // query all docs updated > last persisted, limit to an arbitrary 1_000_000 (10x of what we consider our largest library)
-            const {documents: changedDocs} = await this.collection.storageInstance.getChangedDocumentsSince(
-              1_000_000,
-              // make sure we remove the monotonic clock (xxx.01, xxx.02) from the lwt timestamp to avoid issues with
-              // lookups in indices (dexie)
-              {id: '', lwt: Math.floor(Number(lwt)) - UPDATE_DRIFT}
-            );
+        // query all docs updated > last persisted, limit to an arbitrary 1_000_000 (10x of what we consider our largest library)
+        const {documents: changedDocs} = await this.collection.storageInstance.getChangedDocumentsSince(
+          1_000_000,
+          // make sure we remove the monotonic clock (xxx.01, xxx.02) from the lwt timestamp to avoid issues with
+          // lookups in indices (dexie)
+          {id: '', lwt: Math.floor(Number(lwt)) - UPDATE_DRIFT}
+        );
 
-            for (const changedDoc of changedDocs) {
-              const docWasInOldPersistedResults = persistedQueryCacheIds.has(changedDoc[primaryPath] as string);
-              const docMatchesNow = this.doesDocumentDataMatch(changedDoc);
+        for (const changedDoc of changedDocs) {
+          const docWasInOldPersistedResults = persistedQueryCacheIds.has(changedDoc[primaryPath] as string);
+          const docMatchesNow = this.doesDocumentDataMatch(changedDoc);
 
-              if (docWasInOldPersistedResults && !docMatchesNow && this.mangoQuery.limit && !limitBufferIds?.length) {
-                // Unfortunately if any doc was removed from the results since the last result,
-                // there is no way for us to be sure our calculated results are correct.
-                // So we should simply give up and re-exec the query.
-                this._persistentQueryCacheResult = value ?? undefined;
-                this._persistentQueryCacheResultLwt = lwt ?? undefined;
-                return;
-              }
+          if (docWasInOldPersistedResults && !docMatchesNow && this.mangoQuery.limit && !limitBufferIds?.length) {
+            // Unfortunately if any doc was removed from the results since the last result,
+            // there is no way for us to be sure our calculated results are correct.
+            // So we should simply give up and re-exec the query.
+            this._persistentQueryCacheResult = value ?? undefined;
+            this._persistentQueryCacheResultLwt = lwt ?? undefined;
+            return;
+          }
 
-              if (docWasInOldPersistedResults) {
-                /*
-                * no need to fetch again, we already got the doc from the list of changed docs, and therefore we filter
-                * out docs that are no longer matching the query.
-                */
-                persistedQueryCacheIds.delete(changedDoc[primaryPath] as string);
-              }
+          if (docWasInOldPersistedResults) {
+            /*
+            * no need to fetch again, we already got the doc from the list of changed docs, and therefore we filter
+            * out docs that are no longer matching the query.
+            */
+            persistedQueryCacheIds.delete(changedDoc[primaryPath] as string);
+          }
 
-              // ignore deleted docs or docs that do not match the query
-              if (!docMatchesNow) {
-                continue;
-              }
+          // ignore deleted docs or docs that do not match the query
+          if (!docMatchesNow) {
+            continue;
+          }
 
-              // add to document cache
-              this.collection._docCache.getCachedRxDocument(changedDoc);
+          // add to document cache
+          this.collection._docCache.getCachedRxDocument(changedDoc);
 
-              // add to docs
-              docsData.push(changedDoc);
-              changedDocIds.add(changedDoc[primaryPath] as string);
-            }
-
-            // Get the rest of the doc ids we need to consider:
-            const moreDocIdsToConsider = new Set(Array.from(persistedQueryCacheIds).concat(limitBufferIds ?? []));
-
-            const nonRestoredDocIds: string[] = [];
-            for (const docId of moreDocIdsToConsider) {
-                if (changedDocIds.has(docId)) {
-                    // we already fetched this doc because it changed, don't get it again
-                    continue;
-                }
-
-                // first try to fill from docCache
-                const docData = this.collection._docCache.getLatestDocumentDataIfExists(docId);
-                if (docData && this.doesDocumentDataMatch(docData)) {
-                  docsData.push(docData);
-                }
-
-                if (!docData) {
-                  nonRestoredDocIds.push(docId);
-                }
-            }
-
-            // otherwise get from storage
-            if (nonRestoredDocIds.length > 0) {
-                const docsMap = await this.collection.storageInstance.findDocumentsById(nonRestoredDocIds, false);
-                Object.values(docsMap).forEach(docData => {
-                    if (this.doesDocumentDataMatch(docData)) {
-                        this.collection._docCache.getCachedRxDocument(docData);
-                        docsData.push(docData);
-                    }
-                });
-            }
-
-            const normalizedMangoQuery = normalizeMangoQuery<RxDocType>(
-              this.collection.schema.jsonSchema,
-              this.mangoQuery
-            );
-            const sortComparator = getSortComparator(this.collection.schema.jsonSchema, normalizedMangoQuery);
-            const limit = normalizedMangoQuery.limit ? normalizedMangoQuery.limit : Infinity;
-            docsData = docsData.sort(sortComparator);
-
-            const pastLimitItems = docsData.slice(limit);
-            const finalResults = docsData.slice(0, limit);
-
-            // If we had a limit buffer before, and now we don't... it means the limit buffer was exhausted.
-            // To be confident we're not missing anything, we need to re-exec the query:
-            if (limitBufferIds?.length && pastLimitItems.length === 0) {
-                this._persistentQueryCacheResult = value ?? undefined;
-                this._persistentQueryCacheResultLwt = lwt ?? undefined;
-                return;
-            }
-            // If there are still items past the first LIMIT items, try to restore the limit buffer with them:
-            if (limitBufferIds?.length && pastLimitItems.length > 0) {
-                const lastLimitBufferIndex = pastLimitItems.findLastIndex((d) => limitBufferIds.includes(d[primaryPath] as string));
-                if (lastLimitBufferIndex !== -1){
-                    // If the limit buffer still has room, simply restore it:
-                    this._limitBufferResults = pastLimitItems.slice(0, Math.max(lastLimitBufferIndex + 1, this._limitBufferSize ?? 0));
-                } else {
-                    this._limitBufferResults = [];
-                }
-            }
-
-            // get query into the correct state
-            this._lastEnsureEqual = now();
-            this._latestChangeEvent = this.collection._changeEventBuffer.counter;
-            this._setResultData(finalResults);
+          // add to docs
+          docsData.push(changedDoc);
+          changedDocIds.add(changedDoc[primaryPath] as string);
         }
+
+        // Get the rest of the doc ids we need to consider:
+        const moreDocIdsToConsider = new Set(Array.from(persistedQueryCacheIds).concat(limitBufferIds ?? []));
+
+        const nonRestoredDocIds: string[] = [];
+        for (const docId of moreDocIdsToConsider) {
+            if (changedDocIds.has(docId)) {
+                // we already fetched this doc because it changed, don't get it again
+                continue;
+            }
+
+            // first try to fill from docCache
+            const docData = this.collection._docCache.getLatestDocumentDataIfExists(docId);
+            if (docData && this.doesDocumentDataMatch(docData)) {
+              docsData.push(docData);
+            }
+
+            if (!docData) {
+              nonRestoredDocIds.push(docId);
+            }
+        }
+
+        // otherwise get from storage
+        if (nonRestoredDocIds.length > 0) {
+            const docsMap = await this.collection.storageInstance.findDocumentsById(nonRestoredDocIds, false);
+            Object.values(docsMap).forEach(docData => {
+                if (this.doesDocumentDataMatch(docData)) {
+                    this.collection._docCache.getCachedRxDocument(docData);
+                    docsData.push(docData);
+                }
+            });
+        }
+
+        const normalizedMangoQuery = normalizeMangoQuery<RxDocType>(
+          this.collection.schema.jsonSchema,
+          this.mangoQuery
+        );
+        const sortComparator = getSortComparator(this.collection.schema.jsonSchema, normalizedMangoQuery);
+        const limit = normalizedMangoQuery.limit ? normalizedMangoQuery.limit : Infinity;
+        docsData = docsData.sort(sortComparator);
+
+        const pastLimitItems = docsData.slice(limit);
+        const finalResults = docsData.slice(0, limit);
+
+        // If we had a limit buffer before, and now we don't... it means the limit buffer was exhausted.
+        // To be confident we're not missing anything, we need to re-exec the query:
+        if (limitBufferIds?.length && pastLimitItems.length === 0) {
+            this._persistentQueryCacheResult = value ?? undefined;
+            this._persistentQueryCacheResultLwt = lwt ?? undefined;
+            return;
+        }
+        // If there are still items past the first LIMIT items, try to restore the limit buffer with them:
+        if (limitBufferIds?.length && pastLimitItems.length > 0) {
+            const lastLimitBufferIndex = pastLimitItems.findLastIndex((d) => limitBufferIds.includes(d[primaryPath] as string));
+            if (lastLimitBufferIndex !== -1){
+                // If the limit buffer still has room, simply restore it:
+                this._limitBufferResults = pastLimitItems.slice(0, Math.max(lastLimitBufferIndex + 1, this._limitBufferSize ?? 0));
+            } else {
+                this._limitBufferResults = [];
+            }
+        }
+
+        // get query into the correct state
+        this._lastEnsureEqual = now();
+        this._latestChangeEvent = this.collection._changeEventBuffer.counter;
+        this._setResultData(finalResults);
+
         // eslint-disable-next-line no-console
         console.timeEnd(`Restoring persistent querycache ${this.toString()}`);
 
