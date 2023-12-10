@@ -809,16 +809,6 @@ async function __ensureEqual<RxDocType>(rxQuery: RxQueryBase<RxDocType>): Promis
                     // we got the new results, we do not have to re-execute, mustReExec stays false
                     ret = true; // true because results changed
                     rxQuery._setResultData(eventReduceResult.newResults as any);
-
-                    /*
-                     * We usually want to persist the cache every time there is an update to the query to guarantee
-                     * correctness. Cache persistence has some "cost", and we therefore try to optimize the number of
-                     * writes.
-                     * So, if any item in the result set was removed, we re-persist the query.
-                    */
-                    if (rxQuery.mangoQuery.limit && eventReduceResult.limitResultsRemoved) {
-                      await updatePersistentQueryCache(rxQuery);
-                    }
                 }
             }
         }
