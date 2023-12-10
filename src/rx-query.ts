@@ -280,12 +280,6 @@ export class RxQueryBase<
 
 
         if (this.op === 'count') {
-            // if we have a persisted query cache result, use the result
-            if (this._persistentQueryCacheResult) {
-                // TODO: correct this number, but how?
-                return Number(this._persistentQueryCacheResult);
-            }
-
             const preparedQuery = this.getPreparedQuery();
             const result = await this.collection.storageInstance.count(preparedQuery);
             if (result.mode === 'slow' && !this.collection.database.allowSlowCount) {
