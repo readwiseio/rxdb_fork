@@ -533,12 +533,12 @@ export class RxQueryBase<
             // we already restored the cache once, no need to run twice
             return;
         }
-
         if (this.mangoQuery.skip || this.op === 'count') {
             console.error('The persistent query cache only works on non-skip, non-count queries.');
             return;
         }
 
+        // First, check if there are any query results persisted:
         const persistentQueryId = this.persistentQueryId();
         const value = await this._persistentQueryCacheBackend.getItem<string[] | string>(`qc:${persistentQueryId}`);
         if (!value || !Array.isArray(value) || value.length === 0) {
@@ -547,25 +547,29 @@ export class RxQueryBase<
             return;
         }
 
+        // If there are persisted ids, create our two Sets of ids from the cache:
+        const persistedQueryCacheIds = new Set<string>();
+        const limitBufferIds = new Set<string>();
+
+        for (const id of value) {
+            if (id.startsWith('lb-')) {
+                limitBufferIds.add(id.replace('lb-', ''));
+            } else {
+                persistedQueryCacheIds.add(id);
+            }
+        }
+
         // eslint-disable-next-line no-console
         console.time(`Restoring persistent querycache ${this.toString()}`);
 
-        const primaryPath = this.collection.schema.primaryPath;
-        const results = await Promise.all([
-            this._persistentQueryCacheBackend.getItem(`qc:${persistentQueryId}:lwt`),
-            this._persistentQueryCacheBackend.getItem(`qc:${persistentQueryId}:lb`),
-        ]);
-        const lwt = results[0] as string | null;
-        const limitBufferIds = new Set<string>(results[1] ?? []);
-
+        // Next, pull the lwt from the cache:
+        // TODO: if lwt is too old, should we just give up here? What if there are too many changedDocs?
+        const lwt = (await this._persistentQueryCacheBackend.getItem(`qc:${persistentQueryId}:lwt`)) as string | null;
         if (!lwt) {
             return;
         }
 
-        this._persistentQueryCacheResult = value;
-        this._persistentQueryCacheResultLwt = lwt;
-
-        const persistedQueryCacheIds = new Set(this._persistentQueryCacheResult);
+        const primaryPath = this.collection.schema.primaryPath;
 
         // query all docs updated > last persisted, limit to an arbitrary 1_000_000 (10x of what we consider our largest library)
         const {documents: changedDocs} = await this.collection.storageInstance.getChangedDocumentsSince(
@@ -616,8 +620,6 @@ export class RxQueryBase<
             persistedQueryCacheIds.size >= this.mangoQuery.limit
         );
         if (unchangedItemsMayNowBeInResults) {
-            this._persistentQueryCacheResult = undefined;
-            this._persistentQueryCacheResultLwt = undefined;
             return;
         }
 
@@ -633,7 +635,7 @@ export class RxQueryBase<
             this._limitBufferResults = [];
         }
 
-        // get query into the correct state
+        // Finally, set the query's results to what we've pulled from disk:
         this._lastEnsureEqual = now();
         this._latestChangeEvent = this.collection._changeEventBuffer.counter;
         this._setResultData(finalResults);
@@ -859,26 +861,25 @@ async function updatePersistentQueryCache<RxDocType>(rxQuery: RxQueryBase<RxDocT
     const backend = rxQuery._persistentQueryCacheBackend;
 
     const key = rxQuery.persistentQueryId();
-    const value = rxQuery._result?.docsKeys ?? [];
 
     // update _persistedQueryCacheResult
-    rxQuery._persistentQueryCacheResult = value;
+    rxQuery._persistentQueryCacheResult = rxQuery._result?.docsKeys ?? [];
 
+    const idsToPersist = [...rxQuery._persistentQueryCacheResult];
+    if (rxQuery._limitBufferResults) {
+        rxQuery._limitBufferResults.forEach((d) => {
+            idsToPersist.push(`lb-${d[rxQuery.collection.schema.primaryPath]}`);
+        });
+    }
     // eslint-disable-next-line no-console
     console.time(`Query persistence: persisting results of ${JSON.stringify(rxQuery.mangoQuery)}`);
     // persist query cache
     const lwt = rxQuery._result?.time ?? RX_META_LWT_MINIMUM;
 
-    const promises = [
-        backend.setItem(`qc:${String(key)}`, value),
+    await Promise.all([
+        backend.setItem(`qc:${String(key)}`, idsToPersist),
         backend.setItem(`qc:${String(key)}:lwt`, lwt.toString()),
-    ];
-    if (rxQuery._limitBufferResults) {
-        const limitBufferIds = rxQuery._limitBufferResults.map((d) => d[rxQuery.collection.schema.primaryPath] as string);
-        promises.push(backend.setItem(`qc:${String(key)}:lb`, limitBufferIds));
-    }
-
-    await Promise.all(promises);
+    ]);
 
     // eslint-disable-next-line no-console
     console.timeEnd(`Query persistence: persisting results of ${JSON.stringify(rxQuery.mangoQuery)}`);
