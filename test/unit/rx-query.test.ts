@@ -1604,7 +1604,7 @@ describe('rx-query.test.ts', () => {
             await collection.bulkInsert([human1, human2]);
             await query.exec();
 
-            assert.strictEqual(cache.size, 3);
+            assert.strictEqual(cache.size, 2);
 
             collection.database.destroy();
         });
@@ -1900,7 +1900,7 @@ describe('rx-query.test.ts', () => {
                 const originalResults = await query.exec();
                 assert.deepStrictEqual(originalResults.map(h => h.passportId), ['1', '2']);
                 assert.strictEqual(query._limitBufferResults?.length, 3);
-                assert.strictEqual(cache.size, 3);
+                assert.strictEqual(cache.size, 2);
 
                 // remove one of the items from the query results
                 await collection.find({ selector: { passportId: '1' } }).update({
@@ -1937,7 +1937,7 @@ describe('rx-query.test.ts', () => {
 
                 // uncache the query first, before changes are made
                 simulateNewSession(collection);
-                assert.strictEqual(cache.size, 3);
+                assert.strictEqual(cache.size, 2);
 
                 // remove one of the items from the query results while query is not listening in memory
                 await collection.find({ selector: { passportId: '1' } }).update({
