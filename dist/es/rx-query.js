@@ -117,11 +117,6 @@ export var RxQueryBase = /*#__PURE__*/function () {
     this._execOverDatabaseCount = this._execOverDatabaseCount + 1;
     this._lastExecStart = now();
     if (this.op === 'count') {
-      // if we have a persisted query cache result, use the result
-      if (this._persistentQueryCacheResult) {
-        // TODO: correct this number, but how?
-        return Number(this._persistentQueryCacheResult);
-      }
       var preparedQuery = this.getPreparedQuery();
       var result = await this.collection.storageInstance.count(preparedQuery);
       if (result.mode === 'slow' && !this.collection.database.allowSlowCount) {
@@ -327,109 +322,105 @@ export var RxQueryBase = /*#__PURE__*/function () {
       // we already restored the cache once, no need to run twice
       return;
     }
-    if (this.mangoQuery.skip) {
-      console.error('The persistent query cache only works on non-skip queries.');
+    if (this.mangoQuery.skip || this.op === 'count') {
+      console.error('The persistent query cache only works on non-skip, non-count queries.');
       return;
     }
+
+    // First, check if there are any query results persisted:
     var persistentQueryId = this.persistentQueryId();
     var value = await this._persistentQueryCacheBackend.getItem("qc:" + persistentQueryId);
-    if (!value) {
+    if (!value || !Array.isArray(value) || value.length === 0) {
       // eslint-disable-next-line no-console
       console.log("no persistent query cache found in the backend, returning early " + this.toString());
       return;
     }
+
+    // If there are persisted ids, create our two Sets of ids from the cache:
+    var persistedQueryCacheIds = new Set();
+    var limitBufferIds = new Set();
+    for (var id of value) {
+      if (id.startsWith('lb-')) {
+        limitBufferIds.add(id.replace('lb-', ''));
+      } else {
+        persistedQueryCacheIds.add(id);
+      }
+    }
+
     // eslint-disable-next-line no-console
     console.time("Restoring persistent querycache " + this.toString());
+
+    // Next, pull the lwt from the cache:
+    // TODO: if lwt is too old, should we just give up here? What if there are too many changedDocs?
     var lwt = await this._persistentQueryCacheBackend.getItem("qc:" + persistentQueryId + ":lwt");
-    var primaryPath = this.collection.schema.primaryPath;
-    this._persistentQueryCacheResult = value ?? undefined;
-    this._persistentQueryCacheResultLwt = lwt ?? undefined;
-
-    // if this is a regular query, also load documents into cache
-    if (Array.isArray(value) && value.length > 0) {
-      var persistedQueryCacheIds = new Set(this._persistentQueryCacheResult);
-      var docsData = [];
-
-      // query all docs updated > last persisted, limit to an arbitrary 1_000_000 (10x of what we consider our largest library)
-      var {
-        documents: changedDocs
-      } = await this.collection.storageInstance.getChangedDocumentsSince(1_000_000,
-      // make sure we remove the monotonic clock (xxx.01, xxx.02) from the lwt timestamp to avoid issues with
-      // lookups in indices (dexie)
-      {
-        id: '',
-        lwt: Math.floor(Number(lwt)) - UPDATE_DRIFT
-      });
-      for (var changedDoc of changedDocs) {
-        var docWasInOldPersistedResults = persistedQueryCacheIds.has(changedDoc[primaryPath]);
-        var docMatchesNow = this.doesDocumentDataMatch(changedDoc);
-        if (docWasInOldPersistedResults && !docMatchesNow && this.mangoQuery.limit) {
-          // Unfortunately if any doc was removed from the results since the last result,
-          // there is no way for us to be sure our calculated results are correct.
-          // So we should simply give up and re-exec the query.
-          this._persistentQueryCacheResult = value ?? undefined;
-          this._persistentQueryCacheResultLwt = lwt ?? undefined;
-          return;
-        }
-        if (docWasInOldPersistedResults) {
-          /*
-          * no need to fetch again, we already got the doc from the list of changed docs, and therefore we filter
-          * deleted docs as well
-          */
-          persistedQueryCacheIds.delete(changedDoc[primaryPath]);
-        }
-
-        // ignore deleted docs or docs that do not match the query
-        if (!docMatchesNow) {
-          continue;
-        }
-
-        // add to document cache
-        this.collection._docCache.getCachedRxDocument(changedDoc);
-
-        // add to docs
-        docsData.push(changedDoc);
-      }
-
-      // fetch remaining persisted doc ids
-      var nonRestoredDocIds = [];
-      for (var docId of persistedQueryCacheIds) {
-        // first try to fill from docCache
-        var docData = this.collection._docCache.getLatestDocumentDataIfExists(docId);
-        if (docData && this.doesDocumentDataMatch(docData)) {
-          docsData.push(docData);
-        }
-        if (!docData) {
-          nonRestoredDocIds.push(docId);
-        }
-      }
-
-      // otherwise get from storage
-      if (nonRestoredDocIds.length > 0) {
-        var docsMap = await this.collection.storageInstance.findDocumentsById(nonRestoredDocIds, false);
-        Object.values(docsMap).forEach(docData => {
-          this.collection._docCache.getCachedRxDocument(docData);
-          docsData.push(docData);
-        });
-      }
-      var normalizedMangoQuery = normalizeMangoQuery(this.collection.schema.jsonSchema, this.mangoQuery);
-      var sortComparator = getSortComparator(this.collection.schema.jsonSchema, normalizedMangoQuery);
-      var skip = normalizedMangoQuery.skip ? normalizedMangoQuery.skip : 0;
-      var limit = normalizedMangoQuery.limit ? normalizedMangoQuery.limit : Infinity;
-      var skipPlusLimit = skip + limit;
-      docsData = docsData.sort(sortComparator);
-      docsData = docsData.slice(skip, skipPlusLimit);
-
-      // get query into the correct state
-      this._lastEnsureEqual = now();
-      this._latestChangeEvent = this.collection._changeEventBuffer.counter;
-      this._setResultData(docsData);
-    } else if (value && Number.isInteger(Number(value))) {
-      // get query into the correct state
-      this._lastEnsureEqual = now();
-      this._latestChangeEvent = this.collection._changeEventBuffer.counter;
-      this._setResultData(Number(value));
+    if (!lwt) {
+      return;
     }
+    var primaryPath = this.collection.schema.primaryPath;
+
+    // query all docs updated > last persisted, limit to an arbitrary 1_000_000 (10x of what we consider our largest library)
+    var {
+      documents: changedDocs
+    } = await this.collection.storageInstance.getChangedDocumentsSince(1_000_000,
+    // make sure we remove the monotonic clock (xxx.01, xxx.02) from the lwt timestamp to avoid issues with
+    // lookups in indices (dexie)
+    {
+      id: '',
+      lwt: Math.floor(Number(lwt)) - UPDATE_DRIFT
+    });
+    var changedDocIds = new Set(changedDocs.map(d => d[primaryPath]));
+    var docIdsWeNeedToFetch = [...persistedQueryCacheIds, ...limitBufferIds].filter(id => !changedDocIds.has(id));
+
+    // We use _queryCollectionByIds to fetch the remaining docs we need efficiently, pulling
+    // from query cache if we can (and the storageInstance by ids if we can't):
+    var otherPotentialMatchingDocs = [];
+    await _queryCollectionByIds(this, otherPotentialMatchingDocs, docIdsWeNeedToFetch);
+
+    // Now that we have all potential documents, we just filter (in-memory) the ones that still match our query:
+    var docsData = [];
+    for (var doc of changedDocs.concat(otherPotentialMatchingDocs)) {
+      if (this.doesDocumentDataMatch(doc)) {
+        docsData.push(doc);
+      }
+    }
+
+    // Sort the documents by the query's sort field:
+    var normalizedMangoQuery = normalizeMangoQuery(this.collection.schema.jsonSchema, this.mangoQuery);
+    var sortComparator = getSortComparator(this.collection.schema.jsonSchema, normalizedMangoQuery);
+    var limit = normalizedMangoQuery.limit ? normalizedMangoQuery.limit : Infinity;
+    docsData = docsData.sort(sortComparator);
+
+    // We know for sure that all persisted and limit buffer ids (and changed docs before them) are in the correct
+    // result set. And we can't be sure about any past that point. So cut it off there:
+    var lastValidIndex = docsData.findLastIndex(d => limitBufferIds.has(d[primaryPath]) || persistedQueryCacheIds.has(d[primaryPath]));
+    docsData = docsData.slice(0, lastValidIndex + 1);
+
+    // Now this is the trickiest part.
+    // If we somehow have fewer docs than the limit of our query
+    // (and this wasn't the case because before persistence)
+    // then there is no way for us to know the correct results, and we re-exec:
+    var unchangedItemsMayNowBeInResults = this.mangoQuery.limit && docsData.length < this.mangoQuery.limit && persistedQueryCacheIds.size >= this.mangoQuery.limit;
+    if (unchangedItemsMayNowBeInResults) {
+      return;
+    }
+
+    // Our finalResults are the actual results of this query, and pastLimitItems are any remaining matching
+    // documents we have left over (past the limit).
+    var pastLimitItems = docsData.slice(limit);
+    var finalResults = docsData.slice(0, limit);
+
+    // If there are still items past the first LIMIT items, try to restore the limit buffer with them:
+    if (limitBufferIds.size && pastLimitItems.length > 0) {
+      this._limitBufferResults = pastLimitItems;
+    } else {
+      this._limitBufferResults = [];
+    }
+
+    // Finally, set the query's results to what we've pulled from disk:
+    this._lastEnsureEqual = now();
+    this._latestChangeEvent = this.collection._changeEventBuffer.counter;
+    this._setResultData(finalResults);
+
     // eslint-disable-next-line no-console
     console.timeEnd("Restoring persistent querycache " + this.toString());
   };
@@ -640,7 +631,6 @@ async function __ensureEqual(rxQuery) {
         if (newCount !== previousCount) {
           ret = true; // true because results changed
           rxQuery._setResultData(newCount);
-          await updatePersistentQueryCache(rxQuery);
         }
       } else {
         // 'find' or 'findOne' query
@@ -652,16 +642,6 @@ async function __ensureEqual(rxQuery) {
           // we got the new results, we do not have to re-execute, mustReExec stays false
           ret = true; // true because results changed
           rxQuery._setResultData(eventReduceResult.newResults);
-
-          /*
-           * We usually want to persist the cache every time there is an update to the query to guarantee
-           * correctness. Cache persistence has some "cost", and we therefore try to optimize the number of
-           * writes.
-           * So, if any item in the result set was removed, we re-persist the query.
-          */
-          if (rxQuery.mangoQuery.limit && eventReduceResult.limitResultsRemoved) {
-            await updatePersistentQueryCache(rxQuery);
-          }
         }
       }
     }
@@ -700,19 +680,21 @@ async function updatePersistentQueryCache(rxQuery) {
     return;
   }
   var backend = rxQuery._persistentQueryCacheBackend;
-  var isCount = rxQuery._result?.docs.length === 0 && rxQuery._result.count > 0;
   var key = rxQuery.persistentQueryId();
-  var value = isCount ? rxQuery._result?.count?.toString() ?? '0' : rxQuery._result?.docsKeys ?? [];
 
   // update _persistedQueryCacheResult
-  rxQuery._persistentQueryCacheResult = value;
-
+  rxQuery._persistentQueryCacheResult = rxQuery._result?.docsKeys ?? [];
+  var idsToPersist = [...rxQuery._persistentQueryCacheResult];
+  if (rxQuery._limitBufferResults) {
+    rxQuery._limitBufferResults.forEach(d => {
+      idsToPersist.push("lb-" + d[rxQuery.collection.schema.primaryPath]);
+    });
+  }
   // eslint-disable-next-line no-console
   console.time("Query persistence: persisting results of " + JSON.stringify(rxQuery.mangoQuery));
   // persist query cache
   var lwt = rxQuery._result?.time ?? RX_META_LWT_MINIMUM;
-  await backend.setItem("qc:" + String(key), value);
-  await backend.setItem("qc:" + String(key) + ":lwt", lwt.toString());
+  await Promise.all([backend.setItem("qc:" + String(key), idsToPersist), backend.setItem("qc:" + String(key) + ":lwt", lwt.toString())]);
 
   // eslint-disable-next-line no-console
   console.timeEnd("Query persistence: persisting results of " + JSON.stringify(rxQuery.mangoQuery));
