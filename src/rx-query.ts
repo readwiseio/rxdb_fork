@@ -58,7 +58,13 @@ const newQueryID = function (): number {
 };
 
 // allow changes to be 100ms older than the actual lwt value
-const UPDATE_DRIFT = 100;
+const RESTORE_QUERY_UPDATE_DRIFT = 100;
+
+// 5000 seems like a sane number where re-executing the query will be easier than trying to restore
+const RESTORE_QUERY_MAX_DOCS_CHANGED = 5000;
+
+// If a query was persisted more than a week ago, just re-execute it
+const RESTORE_QUERY_MAX_TIME_AGO = 7 * 24 * 60 * 60 * 1000;
 
 export class RxQueryBase<
     RxDocType,
@@ -569,15 +575,24 @@ export class RxQueryBase<
             return;
         }
 
+        // If the query was persisted too long ago, just re-execute it.
+        if (now() - Number(lwt) > RESTORE_QUERY_MAX_TIME_AGO) {
+            return;
+        }
+
         const primaryPath = this.collection.schema.primaryPath;
 
-        // query all docs updated > last persisted, limit to an arbitrary 1_000_000 (10x of what we consider our largest library)
         const {documents: changedDocs} = await this.collection.storageInstance.getChangedDocumentsSince(
-          1_000_000,
+          RESTORE_QUERY_MAX_DOCS_CHANGED,
           // make sure we remove the monotonic clock (xxx.01, xxx.02) from the lwt timestamp to avoid issues with
           // lookups in indices (dexie)
-          {id: '', lwt: Math.floor(Number(lwt)) - UPDATE_DRIFT}
+          {id: '', lwt: Math.floor(Number(lwt)) - RESTORE_QUERY_UPDATE_DRIFT}
         );
+
+        // If too many docs have changed, just give up and re-execute the query
+        if (changedDocs.length === RESTORE_QUERY_MAX_DOCS_CHANGED) {
+            return;
+        }
 
         const changedDocIds = new Set<string>(changedDocs.map((d) => d[primaryPath] as string));
 
