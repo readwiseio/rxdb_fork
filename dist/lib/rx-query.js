@@ -4,7 +4,7 @@ var _interopRequireDefault = require("@babel/runtime/helpers/interopRequireDefau
 Object.defineProperty(exports, "__esModule", {
   value: true
 });
-exports.RxQueryBase = void 0;
+exports.RxQueryBase = exports.RESTORE_QUERY_MAX_TIME_AGO = void 0;
 exports._getDefaultQuery = _getDefaultQuery;
 exports.createRxQuery = createRxQuery;
 exports.isFindOneByIdQuery = isFindOneByIdQuery;
@@ -26,7 +26,13 @@ var newQueryID = function () {
 };
 
 // allow changes to be 100ms older than the actual lwt value
-var UPDATE_DRIFT = 100;
+var RESTORE_QUERY_UPDATE_DRIFT = 100;
+
+// 5000 seems like a sane number where re-executing the query will be easier than trying to restore
+var RESTORE_QUERY_MAX_DOCS_CHANGED = 5000;
+
+// If a query was persisted more than a week ago, just re-execute it
+var RESTORE_QUERY_MAX_TIME_AGO = exports.RESTORE_QUERY_MAX_TIME_AGO = 7 * 24 * 60 * 60 * 1000;
 var RxQueryBase = exports.RxQueryBase = /*#__PURE__*/function () {
   /**
    * Some stats then are used for debugging and cache replacement policies
@@ -369,18 +375,26 @@ var RxQueryBase = exports.RxQueryBase = /*#__PURE__*/function () {
     if (!lwt) {
       return;
     }
-    var primaryPath = this.collection.schema.primaryPath;
 
-    // query all docs updated > last persisted, limit to an arbitrary 1_000_000 (10x of what we consider our largest library)
+    // If the query was persisted too long ago, just re-execute it.
+    if ((0, _utils.now)() - Number(lwt) > RESTORE_QUERY_MAX_TIME_AGO) {
+      return;
+    }
+    var primaryPath = this.collection.schema.primaryPath;
     var {
       documents: changedDocs
-    } = await this.collection.storageInstance.getChangedDocumentsSince(1_000_000,
+    } = await this.collection.storageInstance.getChangedDocumentsSince(RESTORE_QUERY_MAX_DOCS_CHANGED,
     // make sure we remove the monotonic clock (xxx.01, xxx.02) from the lwt timestamp to avoid issues with
     // lookups in indices (dexie)
     {
       id: '',
-      lwt: Math.floor(Number(lwt)) - UPDATE_DRIFT
+      lwt: Math.floor(Number(lwt)) - RESTORE_QUERY_UPDATE_DRIFT
     });
+
+    // If too many docs have changed, just give up and re-execute the query
+    if (changedDocs.length === RESTORE_QUERY_MAX_DOCS_CHANGED) {
+      return;
+    }
     var changedDocIds = new Set(changedDocs.map(d => d[primaryPath]));
     var docIdsWeNeedToFetch = [...persistedQueryCacheIds, ...limitBufferIds].filter(id => !changedDocIds.has(id));
 

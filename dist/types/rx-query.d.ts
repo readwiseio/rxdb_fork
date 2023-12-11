@@ -4,6 +4,7 @@ export interface QueryCacheBackend {
     getItem<T extends string | string[]>(key: string): Promise<T | null>;
     setItem<T extends string | string[]>(key: string, value: T): Promise<T>;
 }
+export declare const RESTORE_QUERY_MAX_TIME_AGO: number;
 export declare class RxQueryBase<RxDocType, RxQueryResult = RxDocument<RxDocType>[] | RxDocument<RxDocType>> {
     op: RxQueryOP;
     mangoQuery: Readonly<MangoQuery<RxDocType>>;
