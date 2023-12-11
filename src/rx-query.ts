@@ -64,7 +64,7 @@ const RESTORE_QUERY_UPDATE_DRIFT = 100;
 const RESTORE_QUERY_MAX_DOCS_CHANGED = 5000;
 
 // If a query was persisted more than a week ago, just re-execute it
-const RESTORE_QUERY_MAX_TIME_AGO = 7 * 24 * 60 * 60 * 1000;
+export const RESTORE_QUERY_MAX_TIME_AGO = 7 * 24 * 60 * 60 * 1000;
 
 export class RxQueryBase<
     RxDocType,

@@ -16,6 +16,7 @@ import {
     randomCouchString,
     ensureNotFalsy,
     now, uncacheRxQuery, RxCollection,
+    RESTORE_QUERY_MAX_TIME_AGO,
 } from '../../';
 
 import { firstValueFrom } from 'rxjs';
@@ -1827,6 +1828,43 @@ describe('rx-query.test.ts', () => {
 
             assert.strictEqual(result.length, 1);
             assert.strictEqual(query._execOverDatabaseCount, 1);
+
+            collection.database.destroy();
+        });
+
+        it('will re-execute queries if they were cached a long time ago', async () => {
+            const {collection} = await setUpPersistentQueryCacheCollection();
+
+            const human1 = schemaObjects.human('1', 30);
+            await collection.bulkInsert([human1]);
+
+            // fill cache
+            const cache = new Cache();
+            const query1 = collection.find({limit: 1});
+            query1.enableLimitBuffer(5).enablePersistentQueryCache(cache);
+            const queryId = query1.persistentQueryId();
+
+            await query1.exec();
+            clearQueryCache(collection);
+
+            // If we restore the same query, it shouldn't need to re-exec:
+            const querySoon = collection.find({limit: 1});
+            querySoon.enableLimitBuffer(5).enablePersistentQueryCache(cache);
+            await querySoon.exec();
+            assert.strictEqual(querySoon._execOverDatabaseCount, 0);
+
+            clearQueryCache(collection);
+
+            // Now, simulate the query having been cached over a week ago.
+            // It should have to re-exec.
+            const lwt = now() - RESTORE_QUERY_MAX_TIME_AGO - 1000;
+            await cache.setItem(`qc:${queryId}:lwt`, `${lwt}`);
+
+            const queryLater = collection.find({limit: 1});
+            queryLater.enableLimitBuffer(5).enablePersistentQueryCache(cache);
+
+            await queryLater.exec();
+            assert.strictEqual(queryLater._execOverDatabaseCount, 1);
 
             collection.database.destroy();
         });
