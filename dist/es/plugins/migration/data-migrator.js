@@ -51,7 +51,6 @@ export var DataMigrator = /*#__PURE__*/function () {
       // handled docs which got deleted
       percent: 0 // percentage
     };
-
     var stateSubject = new Subject();
 
     /**

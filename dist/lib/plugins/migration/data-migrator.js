@@ -68,7 +68,6 @@ var DataMigrator = exports.DataMigrator = /*#__PURE__*/function () {
       // handled docs which got deleted
       percent: 0 // percentage
     };
-
     var stateSubject = new _rxjs.Subject();
 
     /**

@@ -513,9 +513,13 @@ var RxQueryBase = exports.RxQueryBase = /*#__PURE__*/function () {
 
     // time stamps on when the last full exec over the database has run
     // used to properly handle events that happen while the find-query is running
+
     // Fields used for the Limit Buffer when enabled:
+
     // Fields used for the persistent query cache when enabled:
+
     // lwt = latest write time
+
     /**
      * ensures that the exec-runs
      * are not run in parallel
@@ -701,7 +705,6 @@ async function __ensureEqual(rxQuery) {
   }
   return ret; // true if results have changed
 }
-
 async function updatePersistentQueryCache(rxQuery) {
   if (!rxQuery._persistentQueryCacheBackend) {
     return;

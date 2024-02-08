@@ -96,7 +96,6 @@ function canFillResultSetFromLimitBuffer(s) {
   !doesMatchNow(s) // Limit buffer only cares rn when the changed doc was indeed removed (so no longer matching)
   ;
 }
-
 function actionRemovesItemFromResults(action) {
   return ['removeFirstItem', 'removeLastItem', 'removeExisting', 'runFullQueryAgain'].includes(action);
 }

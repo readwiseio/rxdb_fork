@@ -614,7 +614,6 @@ function canFillResultSetFromLimitBuffer(s) {
   !(0, _eventReduceJs.doesMatchNow)(s) // Limit buffer only cares rn when the changed doc was indeed removed (so no longer matching)
   ;
 }
-
 function actionRemovesItemFromResults(action) {
   return ['removeFirstItem', 'removeLastItem', 'removeExisting', 'runFullQueryAgain'].includes(action);
 }
@@ -2445,7 +2444,6 @@ function getPathSegments(path) {
 
           // Falls through
         }
-
       default:
         {
           if (currentPart === 'index' && !digits.has(character)) {
@@ -2488,7 +2486,6 @@ function getPathSegments(path) {
       }
     // No default
   }
-
   return parts;
 }
 function isStringIndex(object, key) {
@@ -4581,14 +4578,14 @@ async function startReplicationUpstream(state) {
         assumedMasterDoc.metaDocument.isResolvedConflict !== fullDocData._rev && (await state.input.conflictHandler({
           realMasterState: assumedMasterDoc.docData,
           newDocumentState: docData
-        }, 'upstream-check-if-equal')).isEqual ||
+        }, 'upstream-check-if-equal')).isEqual || (
         /**
          * If the master works with _rev fields,
          * we use that to check if our current doc state
          * is different from the assumedMasterDoc.
          */
 
-        assumedMasterDoc && assumedMasterDoc.docData._rev && (0, _utils.parseRevision)(fullDocData._rev).height === fullDocData._meta[state.input.identifier]) {
+        assumedMasterDoc && assumedMasterDoc.docData._rev && (0, _utils.parseRevision)(fullDocData._rev).height === fullDocData._meta[state.input.identifier])) {
           return;
         }
         writeRowsToMasterIds.push(docId);
@@ -7747,9 +7744,13 @@ var RxQueryBase = exports.RxQueryBase = /*#__PURE__*/function () {
 
     // time stamps on when the last full exec over the database has run
     // used to properly handle events that happen while the find-query is running
+
     // Fields used for the Limit Buffer when enabled:
+
     // Fields used for the persistent query cache when enabled:
+
     // lwt = latest write time
+
     /**
      * ensures that the exec-runs
      * are not run in parallel
@@ -7935,7 +7936,6 @@ async function __ensureEqual(rxQuery) {
   }
   return ret; // true if results have changed
 }
-
 async function updatePersistentQueryCache(rxQuery) {
   if (!rxQuery._persistentQueryCacheBackend) {
     return;
