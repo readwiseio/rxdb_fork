@@ -104,9 +104,9 @@ function arrayFilterNotEmpty(value) {
 function countUntilNotMatching(ar, matchingFn) {
   var count = 0;
   var idx = -1;
-  for (var item of ar) {
+  for (var _item of ar) {
     idx = idx + 1;
-    var matching = matchingFn(item, idx);
+    var matching = matchingFn(_item, idx);
     if (matching) {
       count = count + 1;
     } else {
