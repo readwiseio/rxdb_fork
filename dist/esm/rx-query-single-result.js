@@ -59,6 +59,12 @@ export var RxQuerySingleResult = /*#__PURE__*/function () {
       }
       return overwriteGetterForCaching(this, 'docsMap', map);
     }
+  }, {
+    key: "docsKeys",
+    get: function () {
+      var keys = Array.from(this.docsMap.keys());
+      return overwriteGetterForCaching(this, 'docsKeys', keys);
+    }
   }]);
 }();
 //# sourceMappingURL=rx-query-single-result.js.map

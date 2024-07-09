@@ -23,7 +23,7 @@ export class ChangeEventBuffer<RxDocType> {
      * be read without first processing the lazy tasks.
      */
     private subs: Subscription[] = [];
-    private counter: number = 0;
+    public counter: number = 0;
     private eventCounterMap: WeakMap<
         RxChangeEvent<RxDocType>, number
     > = new WeakMap();

@@ -26,4 +26,5 @@ export declare class RxQuerySingleResult<RxDocType> {
     get docsData(): RxDocumentData<RxDocType>[];
     get docsDataMap(): Map<string, RxDocumentData<RxDocType>>;
     get docsMap(): Map<string, RxDocument<RxDocType>>;
+    get docsKeys(): string[];
 }

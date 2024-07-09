@@ -73,4 +73,13 @@ export class RxQuerySingleResult<RxDocType>{
             map
         );
     }
+
+    get docsKeys(): string[] {
+        const keys = Array.from(this.docsMap.keys());
+        return overwriteGetterForCaching(
+            this,
+            'docsKeys',
+            keys
+        );
+    }
 }

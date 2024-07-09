@@ -12,7 +12,7 @@ export declare class ChangeEventBuffer<RxDocType> {
      * be read without first processing the lazy tasks.
      */
     private subs;
-    private counter;
+    counter: number;
     private eventCounterMap;
     /**
      * array with changeEvents
