@@ -7,6 +7,7 @@ export type EventReduceResultPos<RxDocumentType> = {
     runFullQueryAgain: false;
     changed: boolean;
     newResults: RxDocumentType[];
+    limitResultsRemoved: boolean;
 };
 export type EventReduceResult<RxDocumentType> = EventReduceResultNeg | EventReduceResultPos<RxDocumentType>;
 export declare function getSortFieldsOfQuery<RxDocType>(primaryKey: StringKeys<RxDocumentData<RxDocType>>, query: MangoQuery<RxDocType>): (string | StringKeys<RxDocType>)[];
