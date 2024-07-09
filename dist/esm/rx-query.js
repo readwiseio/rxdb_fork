@@ -1,18 +1,29 @@
 import _createClass from "@babel/runtime/helpers/createClass";
 import { BehaviorSubject, merge } from 'rxjs';
 import { mergeMap, filter, map, startWith, distinctUntilChanged, shareReplay } from 'rxjs/operators';
-import { sortObject, pluginMissing, overwriteGetterForCaching, now, PROMISE_RESOLVE_FALSE, RXJS_SHARE_REPLAY_DEFAULTS, ensureNotFalsy, areRxDocumentArraysEqual, appendToArray } from "./plugins/utils/index.js";
+import { appendToArray, areRxDocumentArraysEqual, now, overwriteGetterForCaching, pluginMissing, PROMISE_RESOLVE_FALSE, RX_META_LWT_MINIMUM, RXJS_SHARE_REPLAY_DEFAULTS, sortObject } from "./plugins/utils/index.js";
 import { newRxError } from "./rx-error.js";
 import { runPluginHooks } from "./hooks.js";
 import { calculateNewResults } from "./event-reduce.js";
 import { triggerCacheReplacement } from "./query-cache.js";
-import { getQueryMatcher, normalizeMangoQuery, runQueryUpdateFunction } from "./rx-query-helper.js";
+import { getQueryMatcher, getSortComparator, normalizeMangoQuery, runQueryUpdateFunction } from "./rx-query-helper.js";
 import { RxQuerySingleResult } from "./rx-query-single-result.js";
 import { getQueryPlan } from "./query-planner.js";
+import { ensureNotFalsy } from 'event-reduce-js';
+import { getChangedDocumentsSince } from "./rx-storage-helper.js";
 var _queryCount = 0;
 var newQueryID = function () {
   return ++_queryCount;
 };
+
+// allow changes to be 100ms older than the actual lwt value
+var RESTORE_QUERY_UPDATE_DRIFT = 100;
+
+// 5000 seems like a sane number where re-executing the query will be easier than trying to restore
+var RESTORE_QUERY_MAX_DOCS_CHANGED = 5000;
+
+// If a query was persisted more than a week ago, just re-execute it
+export var RESTORE_QUERY_MAX_TIME_AGO = 7 * 24 * 60 * 60 * 1000;
 export var RxQueryBase = /*#__PURE__*/function () {
   /**
    * Some stats then are used for debugging and cache replacement policies
@@ -40,6 +51,10 @@ export var RxQueryBase = /*#__PURE__*/function () {
     this._latestChangeEvent = -1;
     this._lastExecStart = 0;
     this._lastExecEnd = 0;
+    this._limitBufferSize = null;
+    this._limitBufferResults = null;
+    this._persistentQueryCacheResult = undefined;
+    this._persistentQueryCacheResultLwt = undefined;
     this._ensureEqualQueue = PROMISE_RESOLVE_FALSE;
     this.op = op;
     this.mangoQuery = mangoQuery;
@@ -172,6 +187,9 @@ export var RxQueryBase = /*#__PURE__*/function () {
     var value = JSON.stringify(stringObj);
     this.toString = () => value;
     return value;
+  };
+  _proto.persistentQueryId = function persistentQueryId() {
+    return String(this.collection.database.hashFunction(this.toString()));
   }
 
   /**
@@ -190,6 +208,9 @@ export var RxQueryBase = /*#__PURE__*/function () {
     };
     if (hookInput.mangoQuery.index) {
       hookInput.mangoQuery.index.unshift('_deleted');
+    }
+    if (this._limitBufferSize !== null && hookInput.mangoQuery.limit) {
+      hookInput.mangoQuery.limit = hookInput.mangoQuery.limit + this._limitBufferSize;
     }
     runPluginHooks('prePrepareQuery', hookInput);
     var value = prepareQuery(this.collection.schema.jsonSchema, hookInput.mangoQuery);
@@ -265,6 +286,150 @@ export var RxQueryBase = /*#__PURE__*/function () {
   _proto.limit = function limit(_amount) {
     throw pluginMissing('query-builder');
   };
+  _proto.enableLimitBuffer = function enableLimitBuffer(bufferSize) {
+    if (this._limitBufferSize !== null) {
+      // Limit buffer has already been enabled, do nothing:
+      return this;
+    }
+    if (this._lastExecStart !== 0) {
+      console.error('Can\'t use limit buffer if query has already executed');
+      return this;
+    }
+    if (this.mangoQuery.skip || !this.mangoQuery.limit) {
+      console.error('Right now, limit buffer only works on non-skip, limit queries.');
+      return this;
+    }
+    this._limitBufferSize = bufferSize;
+    return this;
+  };
+  _proto.enablePersistentQueryCache = function enablePersistentQueryCache(backend) {
+    if (this._persistentQueryCacheBackend) {
+      // We've already tried to enable the query cache
+      return this;
+    }
+    this._persistentQueryCacheBackend = backend;
+    this._persistentQueryCacheLoaded = this._restoreQueryCacheFromPersistedState();
+    return this;
+  };
+  _proto._restoreQueryCacheFromPersistedState = async function _restoreQueryCacheFromPersistedState() {
+    if (!this._persistentQueryCacheBackend) {
+      // no cache backend provided, do nothing
+      return;
+    }
+    if (this._persistentQueryCacheResult) {
+      // we already restored the cache once, no need to run twice
+      return;
+    }
+    if (this.mangoQuery.skip || this.op === 'count') {
+      console.error('The persistent query cache only works on non-skip, non-count queries.');
+      return;
+    }
+
+    // First, check if there are any query results persisted:
+    var persistentQueryId = this.persistentQueryId();
+    var value = await this._persistentQueryCacheBackend.getItem("qc:" + persistentQueryId);
+    if (!value || !Array.isArray(value) || value.length === 0) {
+      // eslint-disable-next-line no-console
+      console.log("no persistent query cache found in the backend, returning early " + this.toString());
+      return;
+    }
+
+    // If there are persisted ids, create our two Sets of ids from the cache:
+    var persistedQueryCacheIds = new Set();
+    var limitBufferIds = new Set();
+    for (var id of value) {
+      if (id.startsWith('lb-')) {
+        limitBufferIds.add(id.replace('lb-', ''));
+      } else {
+        persistedQueryCacheIds.add(id);
+      }
+    }
+
+    // eslint-disable-next-line no-console
+    console.time("Restoring persistent querycache " + this.toString());
+
+    // Next, pull the lwt from the cache:
+    // TODO: if lwt is too old, should we just give up here? What if there are too many changedDocs?
+    var lwt = await this._persistentQueryCacheBackend.getItem("qc:" + persistentQueryId + ":lwt");
+    if (!lwt) {
+      return;
+    }
+
+    // If the query was persisted too long ago, just re-execute it.
+    if (now() - Number(lwt) > RESTORE_QUERY_MAX_TIME_AGO) {
+      return;
+    }
+    var primaryPath = this.collection.schema.primaryPath;
+    var {
+      documents: changedDocs
+    } = await getChangedDocumentsSince(this.collection.storageInstance, RESTORE_QUERY_MAX_DOCS_CHANGED,
+    // make sure we remove the monotonic clock (xxx.01, xxx.02) from the lwt timestamp to avoid issues with
+    // lookups in indices (dexie)
+    {
+      id: '',
+      lwt: Math.floor(Number(lwt)) - RESTORE_QUERY_UPDATE_DRIFT
+    });
+
+    // If too many docs have changed, just give up and re-execute the query
+    if (changedDocs.length === RESTORE_QUERY_MAX_DOCS_CHANGED) {
+      return;
+    }
+    var changedDocIds = new Set(changedDocs.map(d => d[primaryPath]));
+    var docIdsWeNeedToFetch = [...persistedQueryCacheIds, ...limitBufferIds].filter(id => !changedDocIds.has(id));
+
+    // We use _queryCollectionByIds to fetch the remaining docs we need efficiently, pulling
+    // from query cache if we can (and the storageInstance by ids if we can't):
+    var otherPotentialMatchingDocs = [];
+    await _queryCollectionByIds(this, otherPotentialMatchingDocs, docIdsWeNeedToFetch);
+
+    // Now that we have all potential documents, we just filter (in-memory) the ones that still match our query:
+    var docsData = [];
+    for (var doc of changedDocs.concat(otherPotentialMatchingDocs)) {
+      if (this.doesDocumentDataMatch(doc)) {
+        docsData.push(doc);
+      }
+    }
+
+    // Sort the documents by the query's sort field:
+    var normalizedMangoQuery = normalizeMangoQuery(this.collection.schema.jsonSchema, this.mangoQuery);
+    var sortComparator = getSortComparator(this.collection.schema.jsonSchema, normalizedMangoQuery);
+    var limit = normalizedMangoQuery.limit ? normalizedMangoQuery.limit : Infinity;
+    docsData = docsData.sort(sortComparator);
+
+    // We know for sure that all persisted and limit buffer ids (and changed docs before them) are in the correct
+    // result set. And we can't be sure about any past that point. So cut it off there:
+    var lastValidIndex = docsData.findLastIndex(d => limitBufferIds.has(d[primaryPath]) || persistedQueryCacheIds.has(d[primaryPath]));
+    docsData = docsData.slice(0, lastValidIndex + 1);
+
+    // Now this is the trickiest part.
+    // If we somehow have fewer docs than the limit of our query
+    // (and this wasn't the case because before persistence)
+    // then there is no way for us to know the correct results, and we re-exec:
+    var unchangedItemsMayNowBeInResults = this.mangoQuery.limit && docsData.length < this.mangoQuery.limit && persistedQueryCacheIds.size >= this.mangoQuery.limit;
+    if (unchangedItemsMayNowBeInResults) {
+      return;
+    }
+
+    // Our finalResults are the actual results of this query, and pastLimitItems are any remaining matching
+    // documents we have left over (past the limit).
+    var pastLimitItems = docsData.slice(limit);
+    var finalResults = docsData.slice(0, limit);
+
+    // If there are still items past the first LIMIT items, try to restore the limit buffer with them:
+    if (limitBufferIds.size && pastLimitItems.length > 0) {
+      this._limitBufferResults = pastLimitItems;
+    } else {
+      this._limitBufferResults = [];
+    }
+
+    // Finally, set the query's results to what we've pulled from disk:
+    this._lastEnsureEqual = now();
+    this._latestChangeEvent = this.collection._changeEventBuffer.counter;
+    this._setResultData(finalResults);
+
+    // eslint-disable-next-line no-console
+    console.timeEnd("Restoring persistent querycache " + this.toString());
+  };
   return _createClass(RxQueryBase, [{
     key: "$",
     get: function () {
@@ -323,6 +488,12 @@ export var RxQueryBase = /*#__PURE__*/function () {
     // used to properly handle events that happen while the find-query is running
     // TODO do we still need these properties?
 
+    // Fields used for the Limit Buffer when enabled:
+
+    // Fields used for the persistent query cache when enabled:
+
+    // lwt = latest write time
+
     /**
      * ensures that the exec-runs
      * are not run in parallel
@@ -364,6 +535,7 @@ export function createRxQuery(op, queryObj, collection, other) {
 
   // ensure when created with same params, only one is created
   ret = tunnelQueryCache(ret);
+  // TODO: clear persistent query cache as well
   triggerCacheReplacement(collection);
   return ret;
 }
@@ -404,7 +576,8 @@ async function _ensureEqual(rxQuery) {
  * ensures that the results of this query is equal to the results which a query over the database would give
  * @return true if results have changed
  */
-function __ensureEqual(rxQuery) {
+async function __ensureEqual(rxQuery) {
+  await rxQuery._persistentQueryCacheLoaded;
   rxQuery._lastEnsureEqual = now();
 
   /**
@@ -435,6 +608,20 @@ function __ensureEqual(rxQuery) {
     } else {
       rxQuery._latestChangeEvent = rxQuery.asRxQuery.collection._changeEventBuffer.getCounter();
       var runChangeEvents = rxQuery.asRxQuery.collection._changeEventBuffer.reduceByLastOfDoc(missedChangeEvents);
+      if (rxQuery._limitBufferResults !== null) {
+        var _loop = async function (cE) {
+          if (rxQuery._limitBufferResults.find(doc => doc[rxQuery.collection.schema.primaryPath] === cE.documentId)) {
+            // If so, the limit buffer is potential invalid -- let's just blow it up
+            // TODO: could we instead update the documents in the limit buffer?
+            rxQuery._limitBufferResults = null;
+            return 1; // break
+          }
+        };
+        // Check if any item in our limit buffer was modified by a change event
+        for (var cE of runChangeEvents) {
+          if (await _loop(cE)) break;
+        }
+      }
       if (rxQuery.op === 'count') {
         // 'count' query
         var previousCount = ensureNotFalsy(rxQuery._result).count;
@@ -491,9 +678,61 @@ function __ensureEqual(rxQuery) {
         rxQuery._setResultData(newResultData);
       }
       return ret;
+    }).then(async returnValue => {
+      await updatePersistentQueryCache(rxQuery);
+      return returnValue;
     });
   }
-  return Promise.resolve(ret); // true if results have changed
+  return ret; // true if results have changed
+}
+async function updatePersistentQueryCache(rxQuery) {
+  if (!rxQuery._persistentQueryCacheBackend) {
+    return;
+  }
+  var backend = rxQuery._persistentQueryCacheBackend;
+  var key = rxQuery.persistentQueryId();
+
+  // update _persistedQueryCacheResult
+  rxQuery._persistentQueryCacheResult = rxQuery._result?.docsKeys ?? [];
+  var idsToPersist = [...rxQuery._persistentQueryCacheResult];
+  if (rxQuery._limitBufferResults) {
+    rxQuery._limitBufferResults.forEach(d => {
+      idsToPersist.push("lb-" + d[rxQuery.collection.schema.primaryPath]);
+    });
+  }
+  // eslint-disable-next-line no-console
+  console.time("Query persistence: persisting results of " + JSON.stringify(rxQuery.mangoQuery));
+  // persist query cache
+  var lwt = rxQuery._result?.time ?? RX_META_LWT_MINIMUM;
+  await Promise.all([backend.setItem("qc:" + String(key), idsToPersist), backend.setItem("qc:" + String(key) + ":lwt", lwt.toString())]);
+
+  // eslint-disable-next-line no-console
+  console.timeEnd("Query persistence: persisting results of " + JSON.stringify(rxQuery.mangoQuery));
+}
+
+// Refactored out of `queryCollection`: modifies the docResults array to fill it with data
+async function _queryCollectionByIds(rxQuery, docResults, docIds) {
+  var collection = rxQuery.collection;
+  docIds = docIds.filter(docId => {
+    // first try to fill from docCache
+    var docData = rxQuery.collection._docCache.getLatestDocumentDataIfExists(docId);
+    if (docData) {
+      if (!docData._deleted) {
+        docResults.push(docData);
+      }
+      return false;
+    } else {
+      return true;
+    }
+  });
+
+  // otherwise get from storage
+  if (docIds.length > 0) {
+    var docsMap = await collection.storageInstance.findDocumentsById(docIds, false);
+    Object.values(docsMap).forEach(docData => {
+      docResults.push(docData);
+    });
+  }
 }
 
 /**
@@ -525,6 +764,7 @@ export function prepareQuery(schema, mutateableQuery) {
  * when specific queries are used.
  */
 export async function queryCollection(rxQuery) {
+  await rxQuery._persistentQueryCacheLoaded;
   var docs = [];
   var collection = rxQuery.collection;
 
@@ -554,6 +794,7 @@ export async function queryCollection(rxQuery) {
         var docsFromStorage = await collection.storageInstance.findDocumentsById(docIds, false);
         appendToArray(docs, docsFromStorage);
       }
+      await _queryCollectionByIds(rxQuery, docs, rxQuery.isFindOneByIdQuery);
     } else {
       var docId = rxQuery.isFindOneByIdQuery;
 
@@ -573,6 +814,11 @@ export async function queryCollection(rxQuery) {
   } else {
     var preparedQuery = rxQuery.getPreparedQuery();
     var queryResult = await collection.storageInstance.query(preparedQuery);
+    if (rxQuery._limitBufferSize !== null && rxQuery.mangoQuery.limit && queryResult.documents.length > rxQuery.mangoQuery.limit) {
+      // If there are more than query.limit results, we pull out our buffer items from the
+      // last rxQuery._limitBufferSize items of the results.
+      rxQuery._limitBufferResults = queryResult.documents.splice(rxQuery.mangoQuery.limit);
+    }
     docs = queryResult.documents;
   }
   return docs;
@@ -589,18 +835,18 @@ export async function queryCollection(rxQuery) {
 export function isFindOneByIdQuery(primaryPath, query) {
   // must have exactly one operator which must be $eq || $in
   if (!query.skip && query.selector && Object.keys(query.selector).length === 1 && query.selector[primaryPath]) {
-    var value = query.selector[primaryPath];
-    if (typeof value === 'string') {
-      return value;
-    } else if (Object.keys(value).length === 1 && typeof value.$eq === 'string') {
-      return value.$eq;
+    var _value = query.selector[primaryPath];
+    if (typeof _value === 'string') {
+      return _value;
+    } else if (Object.keys(_value).length === 1 && typeof _value.$eq === 'string') {
+      return _value.$eq;
     }
 
     // same with $in string arrays
-    if (Object.keys(value).length === 1 && Array.isArray(value.$eq) &&
+    if (Object.keys(_value).length === 1 && Array.isArray(_value.$eq) &&
     // must only contain strings
-    !value.$eq.find(r => typeof r !== 'string')) {
-      return value.$eq;
+    !_value.$eq.find(r => typeof r !== 'string')) {
+      return _value.$eq;
     }
   }
   return false;

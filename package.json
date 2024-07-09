@@ -392,7 +392,7 @@
     "test:browser:remote": "  npm run transpile && cross-env CI=true DEFAULT_STORAGE=remote karma start ./config/karma.conf.cjs --single-run",
     "test:browser:remote:loop": "npm run test:browser:remote && npm run test:browser:remote:loop",
     "test:browser:custom": " npm run transpile && cross-env CI=true DEFAULT_STORAGE=custom  karma start ./config/karma.conf.cjs --single-run",
-    "test:replication-firestore": "npm run transpile && firebase emulators:exec \"cross-env DEFAULT_STORAGE=dexie mocha --expose-gc --config ./config/.mocharc.cjs ./test_tmp/replication-firestore.test.js\" --only firestore --project 'rxdb-test'",
+    "test:replication-firestore": "npm run transpile && firebase emulators:exec \"cross-env DEFAULT_STORAGE=dexie mocha --expose-gc --config ./config/.mocharc.cjs ./test_tmp/replication-firestore.test.js\" --only firestore --project 'rxdsrc/rx-query.tsb-test'",
     "test:replication-couchdb": "npm run transpile && concurrently \"npm run couch:start\" \"cross-env NATIVE_COUCHDB=5984 DEFAULT_STORAGE=dexie mocha --config ./config/.mocharc.cjs ./test_tmp/replication-couchdb.test.js\" --success first --kill-others",
     "test:replication-nats": "npm run transpile && concurrently \"npm run nats:start\" \"cross-env DEFAULT_STORAGE=dexie mocha --config ./config/.mocharc.cjs ./test_tmp/replication-nats.test.js\" --success first --kill-others",
     "test:core": "npm run transpile && mocha ./test_tmp/unit/core.node.js",
@@ -447,7 +447,8 @@
     "preversion": "npm run lint && npm run test",
     "dev": "watch 'npm run test:node:memory' src/ test/",
     "dev:example": "watch 'npm run transpile:src && echo \"done\"' src/ test/",
-    "cloud-signaling-server": "node ./scripts/start-cloud-signaling-server.mjs --max-old-space-size=2048"
+    "cloud-signaling-server": "node ./scripts/start-cloud-signaling-server.mjs --max-old-space-size=2048",
+    "watch:transpile": "nodemon --watch src/ --ext ts --ignore 'src/plugins/*' --exec npm run transpile"
   },
   "pre-commit": [
     "lint"
@@ -575,6 +576,7 @@
     "nconf": "0.12.1",
     "node-datachannel": "0.12.0",
     "node-pre-gyp": "0.17.0",
+    "nodemon": "3.0.1",
     "pre-commit": "1.2.2",
     "process": "0.11.10",
     "querystring-es3": "0.2.1",

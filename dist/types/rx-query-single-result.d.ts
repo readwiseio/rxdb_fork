@@ -28,4 +28,5 @@ export declare class RxQuerySingleResult<RxDocType> {
     get docsDataMap(): Map<string, RxDocumentData<RxDocType>>;
     get docsMap(): Map<string, RxDocument<RxDocType>>;
     getValue(throwIfMissing?: boolean): number | RxDocument<RxDocType> | RxDocument<RxDocType>[] | Map<string, RxDocument<RxDocType>> | null;
+    get docsKeys(): string[];
 }

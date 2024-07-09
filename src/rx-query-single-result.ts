@@ -99,4 +99,13 @@ export class RxQuerySingleResult<RxDocType> {
             return this.documents.slice(0);
         }
     }
+
+    get docsKeys(): string[] {
+        const keys = Array.from(this.docsMap.keys());
+        return overwriteGetterForCaching(
+            this,
+            'docsKeys',
+            keys
+        );
+    }
 }

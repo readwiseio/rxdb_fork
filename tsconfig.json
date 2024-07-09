@@ -2,7 +2,7 @@
     // @link https://iamturns.com/typescript-babel/
     "compilerOptions": {
         // Target latest version of ECMAScript.
-        "target": "es2022",
+        "target": "esnext",
         // Search under node_modules for non-relative imports.
         // https://www.youtube.com/watch?v=H91aqUHn8sE
         "moduleResolution": "node",

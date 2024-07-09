@@ -92,6 +92,12 @@ var RxQuerySingleResult = exports.RxQuerySingleResult = /*#__PURE__*/function ()
       }
       return (0, _index.overwriteGetterForCaching)(this, 'docsMap', map);
     }
+  }, {
+    key: "docsKeys",
+    get: function () {
+      var keys = Array.from(this.docsMap.keys());
+      return (0, _index.overwriteGetterForCaching)(this, 'docsKeys', keys);
+    }
   }]);
 }();
 //# sourceMappingURL=rx-query-single-result.js.map
