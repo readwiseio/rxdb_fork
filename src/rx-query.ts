@@ -1,17 +1,22 @@
+import { ensureNotFalsy } from 'event-reduce-js';
 import {
     BehaviorSubject,
     firstValueFrom,
-    Observable,
-    merge
+    merge,
+    Observable
 } from 'rxjs';
 import {
-    mergeMap,
+    distinctUntilChanged,
     filter,
     map,
-    startWith,
-    distinctUntilChanged,
-    shareReplay
+    mergeMap,
+    shareReplay,
+    startWith
 } from 'rxjs/operators';
+import { calculateNewResults } from './event-reduce.ts';
+import {
+    runPluginHooks
+} from './hooks.ts';
 import {
     appendToArray,
     areRxDocumentArraysEqual,
@@ -22,40 +27,35 @@ import {
     RXJS_SHARE_REPLAY_DEFAULTS,
     sortObject
 } from './plugins/utils/index.ts';
+import { triggerCacheReplacement } from './query-cache.ts';
+import { getQueryPlan } from './query-planner.ts';
 import {
     newRxError
 } from './rx-error.ts';
 import {
-    runPluginHooks
-} from './hooks.ts';
+    getQueryMatcher,
+    getSortComparator,
+    normalizeMangoQuery,
+    runQueryUpdateFunction
+} from './rx-query-helper.ts';
+import { RxQuerySingleResult } from './rx-query-single-result.ts';
+import { getChangedDocumentsSince } from './rx-storage-helper.ts';
 import type {
+    FilledMangoQuery,
     MangoQuery,
+    MangoQuerySelector, MangoQuerySortPart,
+    ModifyFunction,
     PreparedQuery,
     QueryMatcher,
     RxChangeEvent,
     RxCollection,
     RxDocument,
     RxDocumentData,
-    RxJsonSchema,
-    FilledMangoQuery,
-    ModifyFunction,
     RxDocumentWriteData,
+    RxJsonSchema,
     RxQuery,
-    RxQueryOP, MangoQuerySelector, MangoQuerySortPart
+    RxQueryOP
 } from './types/index.d.ts';
-import { calculateNewResults } from './event-reduce.ts';
-import { triggerCacheReplacement } from './query-cache.ts';
-import {
-    getQueryMatcher,
-    getSortComparator,
-    normalizeMangoQuery,
-    runQueryUpdateFunction
-
-} from './rx-query-helper.ts';
-import { RxQuerySingleResult } from './rx-query-single-result.ts';
-import { getQueryPlan } from './query-planner.ts';
-import { ensureNotFalsy } from 'event-reduce-js';
-import { getChangedDocumentsSince } from './rx-storage-helper.ts';
 
 
 export interface QueryCacheBackend {
@@ -418,7 +418,14 @@ export class RxQueryBase<
             )
         };
 
-        (hookInput.mangoQuery.selector as any)._deleted = { $eq: false };
+        // Set _deleted to false if not explicitly set in selector
+        if (!('_deleted' in hookInput.mangoQuery.selector)) {
+            hookInput.mangoQuery.selector = {
+                ...hookInput.mangoQuery.selector,
+                _deleted: { $eq: false },
+            };
+        }
+
         if (hookInput.mangoQuery.index) {
             hookInput.mangoQuery.index.unshift('_deleted');
         }
@@ -816,7 +823,12 @@ async function __ensureEqual<RxDocType>(rxQuery: RxQueryBase<RxDocType, any>): P
                 }
             }
 
-            if (rxQuery.op === 'count') {
+            if ('_deleted' in rxQuery.getPreparedQuery().query.selector) {
+                return rxQuery._execOverDatabase().then((newResultData) => {
+                    rxQuery._setResultData(newResultData);
+                    return true;
+                });
+            } else if (rxQuery.op === 'count') {
                 // 'count' query
                 const previousCount = ensureNotFalsy(rxQuery._result).count;
                 let newCount = previousCount;
