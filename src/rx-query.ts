@@ -49,7 +49,8 @@ import {
     getQueryMatcher,
     getSortComparator,
     normalizeMangoQuery,
-    runQueryUpdateFunction
+    runQueryUpdateFunction,
+    selectorIncludesDeleted
 
 } from './rx-query-helper.ts';
 import { RxQuerySingleResult } from './rx-query-single-result.ts';
@@ -197,6 +198,10 @@ export class RxQueryBase<
             undefined,
             this.collection.database
         ) as any;
+    }
+
+    get includesDeleted(): boolean {
+        return selectorIncludesDeleted(this.mangoQuery.selector);
     }
 
     // stores the changeEvent-number of the last handled change-event
@@ -419,7 +424,7 @@ export class RxQueryBase<
         };
 
         // Set _deleted to false if not explicitly set in selector
-        if (!('_deleted' in hookInput.mangoQuery.selector)) {
+        if (!this.includesDeleted) {
             hookInput.mangoQuery.selector = {
                 ...hookInput.mangoQuery.selector,
                 _deleted: { $eq: false },
@@ -823,7 +828,7 @@ async function __ensureEqual<RxDocType>(rxQuery: RxQueryBase<RxDocType, any>): P
                 }
             }
 
-            if ('_deleted' in rxQuery.getPreparedQuery().query.selector) {
+            if (rxQuery.includesDeleted) {
                 return rxQuery._execOverDatabase().then((newResultData) => {
                     rxQuery._setResultData(newResultData);
                     return true;
