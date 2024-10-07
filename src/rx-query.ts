@@ -1,22 +1,17 @@
-import { ensureNotFalsy } from 'event-reduce-js';
 import {
     BehaviorSubject,
     firstValueFrom,
-    merge,
-    Observable
+    Observable,
+    merge
 } from 'rxjs';
 import {
-    distinctUntilChanged,
+    mergeMap,
     filter,
     map,
-    mergeMap,
-    shareReplay,
-    startWith
+    startWith,
+    distinctUntilChanged,
+    shareReplay
 } from 'rxjs/operators';
-import { calculateNewResults } from './event-reduce.ts';
-import {
-    runPluginHooks
-} from './hooks.ts';
 import {
     appendToArray,
     areRxDocumentArraysEqual,
@@ -27,35 +22,40 @@ import {
     RXJS_SHARE_REPLAY_DEFAULTS,
     sortObject
 } from './plugins/utils/index.ts';
-import { triggerCacheReplacement } from './query-cache.ts';
-import { getQueryPlan } from './query-planner.ts';
 import {
     newRxError
 } from './rx-error.ts';
 import {
-    getQueryMatcher,
-    getSortComparator,
-    normalizeMangoQuery,
-    runQueryUpdateFunction
-} from './rx-query-helper.ts';
-import { RxQuerySingleResult } from './rx-query-single-result.ts';
-import { getChangedDocumentsSince } from './rx-storage-helper.ts';
+    runPluginHooks
+} from './hooks.ts';
 import type {
-    FilledMangoQuery,
     MangoQuery,
-    MangoQuerySelector, MangoQuerySortPart,
-    ModifyFunction,
     PreparedQuery,
     QueryMatcher,
     RxChangeEvent,
     RxCollection,
     RxDocument,
     RxDocumentData,
-    RxDocumentWriteData,
     RxJsonSchema,
+    FilledMangoQuery,
+    ModifyFunction,
+    RxDocumentWriteData,
     RxQuery,
-    RxQueryOP
+    RxQueryOP, MangoQuerySelector, MangoQuerySortPart
 } from './types/index.d.ts';
+import { calculateNewResults } from './event-reduce.ts';
+import { triggerCacheReplacement } from './query-cache.ts';
+import {
+    getQueryMatcher,
+    getSortComparator,
+    normalizeMangoQuery,
+    runQueryUpdateFunction
+
+} from './rx-query-helper.ts';
+import { RxQuerySingleResult } from './rx-query-single-result.ts';
+import { getQueryPlan } from './query-planner.ts';
+import { ensureNotFalsy } from 'event-reduce-js';
+import { getChangedDocumentsSince } from './rx-storage-helper.ts';
 
 
 export interface QueryCacheBackend {
