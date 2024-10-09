@@ -1,4 +1,4 @@
-import type { DeterministicSortComparator, FilledMangoQuery, MangoQuery, QueryMatcher, RxDocument, RxDocumentData, RxJsonSchema, RxQuery } from './types/index.d.ts';
+import type { DeterministicSortComparator, FilledMangoQuery, MangoQuery, MangoQuerySelector, QueryMatcher, RxDocument, RxDocumentData, RxJsonSchema, RxQuery } from './types/index.d.ts';
 /**
  * Normalize the query to ensure we have all fields set
  * and queries that represent the same query logic are detected as equal by the caching.
@@ -17,3 +17,9 @@ export declare function getSortComparator<RxDocType>(schema: RxJsonSchema<RxDocu
  */
 export declare function getQueryMatcher<RxDocType>(_schema: RxJsonSchema<RxDocType> | RxJsonSchema<RxDocumentData<RxDocType>>, query: FilledMangoQuery<RxDocType>): QueryMatcher<RxDocumentData<RxDocType>>;
 export declare function runQueryUpdateFunction<RxDocType, RxQueryResult>(rxQuery: RxQuery<RxDocType, RxQueryResult>, fn: (doc: RxDocument<RxDocType>) => Promise<RxDocument<RxDocType>>): Promise<RxQueryResult>;
+/**
+ * Checks if a given selector includes deleted documents.
+ * @param selector The MangoQuerySelector to check
+ * @returns True if the selector includes deleted documents, false otherwise
+ */
+export declare function selectorIncludesDeleted<RxDocType>(selector: MangoQuerySelector<RxDocType> | undefined): boolean;
