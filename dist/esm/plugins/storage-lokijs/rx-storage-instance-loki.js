@@ -1,4 +1,3 @@
-import _readOnlyError from "@babel/runtime/helpers/readOnlyError";
 import { Subject } from 'rxjs';
 import { flatClone, now, ensureNotFalsy, isMaybeReadonlyArray, getFromMapOrThrow, hasDeepProperty, RXDB_UTILS_GLOBAL, defaultHashSha256, PREMIUM_FLAG_HASH } from "../utils/index.js";
 import { newRxError } from "../../rx-error.js";
