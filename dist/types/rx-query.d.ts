@@ -29,6 +29,7 @@ export declare class RxQueryBase<RxDocType, RxQueryResult, OrmMethods = {}, Reac
     constructor(op: RxQueryOP, mangoQuery: Readonly<MangoQuery<RxDocType>>, collection: RxCollection<RxDocType>, other?: any);
     get $(): Observable<RxQueryResult>;
     get $$(): Reactivity;
+    get includesDeleted(): boolean;
     _latestChangeEvent: -1 | number;
     _lastExecStart: number;
     _lastExecEnd: number;

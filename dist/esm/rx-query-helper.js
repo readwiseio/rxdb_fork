@@ -203,4 +203,31 @@ export async function runQueryUpdateFunction(rxQuery, fn) {
     return result;
   }
 }
+
+/**
+ * Checks if a given selector includes deleted documents.
+ * @param selector The MangoQuerySelector to check
+ * @returns True if the selector includes deleted documents, false otherwise
+ */
+export function selectorIncludesDeleted(selector) {
+  if (!selector) {
+    return false;
+  }
+  var isTrue = value => value === true || typeof value === 'object' && value !== null && '$eq' in value && value.$eq === true;
+  var isNotFalse = value => value === true || typeof value === 'object' && value !== null && '$ne' in value && value.$ne === false;
+  var hasDeletedTrue = condition => '_deleted' in condition && (isTrue(condition._deleted) || isNotFalse(condition._deleted));
+  if ('_deleted' in selector) {
+    return isTrue(selector._deleted) || isNotFalse(selector._deleted);
+  }
+  if ('$or' in selector && Array.isArray(selector.$or)) {
+    return selector.$or.some(hasDeletedTrue);
+  }
+  if ('$and' in selector && Array.isArray(selector.$and)) {
+    return selector.$and.some(hasDeletedTrue);
+  }
+  if ('$nor' in selector && Array.isArray(selector.$nor)) {
+    return !selector.$nor.every(condition => !hasDeletedTrue(condition));
+  }
+  return false;
+}
 //# sourceMappingURL=rx-query-helper.js.map

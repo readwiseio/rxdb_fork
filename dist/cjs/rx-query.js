@@ -217,9 +217,16 @@ var RxQueryBase = exports.RxQueryBase = /*#__PURE__*/function () {
       // can be mutated by the hooks so we have to deep clone first.
       mangoQuery: (0, _rxQueryHelper.normalizeMangoQuery)(this.collection.schema.jsonSchema, this.mangoQuery)
     };
-    hookInput.mangoQuery.selector._deleted = {
-      $eq: false
-    };
+
+    // Set _deleted to false if not explicitly set in selector
+    if (!this.includesDeleted) {
+      hookInput.mangoQuery.selector = {
+        ...hookInput.mangoQuery.selector,
+        _deleted: {
+          $eq: false
+        }
+      };
+    }
     if (hookInput.mangoQuery.index) {
       hookInput.mangoQuery.index.unshift('_deleted');
     }
@@ -495,6 +502,11 @@ var RxQueryBase = exports.RxQueryBase = /*#__PURE__*/function () {
       var reactivity = this.collection.database.getReactivityFactory();
       return reactivity.fromObservable(this.$, undefined, this.collection.database);
     }
+  }, {
+    key: "includesDeleted",
+    get: function () {
+      return (0, _rxQueryHelper.selectorIncludesDeleted)(this.mangoQuery.selector);
+    }
 
     // stores the changeEvent-number of the last handled change-event
 
@@ -636,7 +648,12 @@ async function __ensureEqual(rxQuery) {
           if (await _loop(cE)) break;
         }
       }
-      if (rxQuery.op === 'count') {
+      if (rxQuery.includesDeleted) {
+        return rxQuery._execOverDatabase().then(newResultData => {
+          rxQuery._setResultData(newResultData);
+          return true;
+        });
+      } else if (rxQuery.op === 'count') {
         // 'count' query
         var previousCount = (0, _eventReduceJs.ensureNotFalsy)(rxQuery._result).count;
         var newCount = previousCount;
