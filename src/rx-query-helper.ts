@@ -5,7 +5,10 @@ import type {
     DeterministicSortComparator,
     FilledMangoQuery,
     MangoQuery,
+    MangoQueryOperators,
+    MangoQuerySelector,
     MangoQuerySortDirection,
+    PropertyType,
     QueryMatcher,
     RxDocument,
     RxDocumentData,
@@ -247,4 +250,62 @@ export async function runQueryUpdateFunction<RxDocType, RxQueryResult>(
         const result = await fn(docs as any);
         return result as any;
     }
+}
+
+/**
+ * Checks if a given selector includes deleted documents.
+ * @param selector The MangoQuerySelector to check
+ * @returns True if the selector includes deleted documents, false otherwise
+ */
+export function selectorIncludesDeleted<RxDocType>(
+    selector: MangoQuerySelector<RxDocType> | undefined
+): boolean {
+    if (!selector) {
+        return false;
+    }
+
+    const isTrue = (value: unknown): boolean =>
+        value === true ||
+        (typeof value === 'object' &&
+            value !== null &&
+            '$eq' in value &&
+            (value as MangoQueryOperators<boolean>).$eq === true);
+
+
+    const isNotFalse = (value: unknown): boolean =>
+        value === true ||
+        (typeof value === 'object' &&
+            value !== null &&
+            '$ne' in value &&
+            (value as MangoQueryOperators<boolean>).$ne === false);
+
+    const hasDeletedTrue = (
+        condition: MangoQuerySelector<RxDocType>
+    ): boolean =>
+        '_deleted' in condition &&
+        (isTrue(condition._deleted as PropertyType<RxDocType, '_deleted'>) ||
+            isNotFalse(
+                condition._deleted as PropertyType<RxDocType, '_deleted'>
+            ));
+
+    if ('_deleted' in selector) {
+        return (
+            isTrue(selector._deleted as PropertyType<RxDocType, '_deleted'>) ||
+            isNotFalse(selector._deleted as PropertyType<RxDocType, '_deleted'>)
+        );
+    }
+
+    if ('$or' in selector && Array.isArray(selector.$or)) {
+        return selector.$or.some(hasDeletedTrue);
+    }
+
+    if ('$and' in selector && Array.isArray(selector.$and)) {
+        return selector.$and.some(hasDeletedTrue);
+    }
+
+    if ('$nor' in selector && Array.isArray(selector.$nor)) {
+        return !selector.$nor.every((condition) => !hasDeletedTrue(condition));
+    }
+
+    return false;
 }

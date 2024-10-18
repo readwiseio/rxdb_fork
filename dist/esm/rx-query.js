@@ -6,7 +6,7 @@ import { newRxError } from "./rx-error.js";
 import { runPluginHooks } from "./hooks.js";
 import { calculateNewResults } from "./event-reduce.js";
 import { triggerCacheReplacement } from "./query-cache.js";
-import { getQueryMatcher, getSortComparator, normalizeMangoQuery, runQueryUpdateFunction } from "./rx-query-helper.js";
+import { getQueryMatcher, getSortComparator, normalizeMangoQuery, runQueryUpdateFunction, selectorIncludesDeleted } from "./rx-query-helper.js";
 import { RxQuerySingleResult } from "./rx-query-single-result.js";
 import { getQueryPlan } from "./query-planner.js";
 import { ensureNotFalsy } from 'event-reduce-js';
@@ -218,9 +218,16 @@ export var RxQueryBase = /*#__PURE__*/function () {
       // can be mutated by the hooks so we have to deep clone first.
       mangoQuery: normalizeMangoQuery(this.collection.schema.jsonSchema, this.mangoQuery)
     };
-    hookInput.mangoQuery.selector._deleted = {
-      $eq: false
-    };
+
+    // Set _deleted to false if not explicitly set in selector
+    if (!this.includesDeleted) {
+      hookInput.mangoQuery.selector = {
+        ...hookInput.mangoQuery.selector,
+        _deleted: {
+          $eq: false
+        }
+      };
+    }
     if (hookInput.mangoQuery.index) {
       hookInput.mangoQuery.index.unshift('_deleted');
     }
@@ -508,6 +515,11 @@ export var RxQueryBase = /*#__PURE__*/function () {
       var reactivity = this.collection.database.getReactivityFactory();
       return reactivity.fromObservable(this.$, undefined, this.collection.database);
     }
+  }, {
+    key: "includesDeleted",
+    get: function () {
+      return selectorIncludesDeleted(this.mangoQuery.selector);
+    }
 
     // stores the changeEvent-number of the last handled change-event
 
@@ -644,7 +656,12 @@ async function __ensureEqual(rxQuery) {
           if (await _loop(cE)) break;
         }
       }
-      if (rxQuery.op === 'count') {
+      if (rxQuery.includesDeleted) {
+        return rxQuery._execOverDatabase().then(newResultData => {
+          rxQuery._setResultData(newResultData);
+          return true;
+        });
+      } else if (rxQuery.op === 'count') {
         // 'count' query
         var previousCount = ensureNotFalsy(rxQuery._result).count;
         var newCount = previousCount;

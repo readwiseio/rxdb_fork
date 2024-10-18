@@ -49,7 +49,8 @@ import {
     getQueryMatcher,
     getSortComparator,
     normalizeMangoQuery,
-    runQueryUpdateFunction
+    runQueryUpdateFunction,
+    selectorIncludesDeleted
 
 } from './rx-query-helper.ts';
 import { RxQuerySingleResult } from './rx-query-single-result.ts';
@@ -197,6 +198,10 @@ export class RxQueryBase<
             undefined,
             this.collection.database
         ) as any;
+    }
+
+    get includesDeleted(): boolean {
+        return selectorIncludesDeleted(this.mangoQuery.selector);
     }
 
     // stores the changeEvent-number of the last handled change-event
@@ -418,7 +423,14 @@ export class RxQueryBase<
             )
         };
 
-        (hookInput.mangoQuery.selector as any)._deleted = { $eq: false };
+        // Set _deleted to false if not explicitly set in selector
+        if (!this.includesDeleted) {
+            hookInput.mangoQuery.selector = {
+                ...hookInput.mangoQuery.selector,
+                _deleted: { $eq: false },
+            };
+        }
+
         if (hookInput.mangoQuery.index) {
             hookInput.mangoQuery.index.unshift('_deleted');
         }
@@ -816,7 +828,12 @@ async function __ensureEqual<RxDocType>(rxQuery: RxQueryBase<RxDocType, any>): P
                 }
             }
 
-            if (rxQuery.op === 'count') {
+            if (rxQuery.includesDeleted) {
+                return rxQuery._execOverDatabase().then((newResultData) => {
+                    rxQuery._setResultData(newResultData);
+                    return true;
+                });
+            } else if (rxQuery.op === 'count') {
                 // 'count' query
                 const previousCount = ensureNotFalsy(rxQuery._result).count;
                 let newCount = previousCount;
