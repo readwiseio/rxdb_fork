@@ -224,24 +224,21 @@ export function getSortComparator<RxDocType>(
 // so that the event reduce library can work properly and not remove tagged documents from results.
 function unescapeTagKeysInSelector(query: any): any {
     if (typeof query === 'object' && query !== null) {
+        const newQuery: any = Array.isArray(query) ? [] : {};
         // loop through all keys of the object
         for (const key in query) {
             // eslint-disable-next-line no-prototype-builtins
             if (query.hasOwnProperty(key)) {
                 // check if key matches the pattern "tags.\"x\""
+                let newKey = key;
                 if (key.startsWith('tags.') && key.includes('"')) {
-                    const newKey = key.replace(/\\"/g, '');
-                    // reassign the value to the new key
-                    query[newKey] = query[key];
-                    // delete the old key
-                    delete query[key];
+                    newKey = key.replace(/"/g, '');
                 }
-                // if value is an object, apply the function recursively
-                if (typeof query[key] === 'object') {
-                    query[key] = unescapeTagKeysInSelector(query[key]);
-                }
+                // recursively process the value
+                newQuery[newKey] = unescapeTagKeysInSelector(query[key]);
             }
         }
+        return newQuery;
     }
     return query;
 }
