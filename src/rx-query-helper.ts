@@ -210,6 +210,42 @@ export function getSortComparator<RxDocType>(
     return fun;
 }
 
+// When the rxdb adapter is sqlite, we escape tag names by wrapping them in quotes:
+//  https://github.com/TristanH/rekindled/blob/e42d2fa40305ba98dfab12e8dd7aed07ddb17ebf/reading-clients/shared/database/queryHelpers.ts#L18
+//
+// Although sqlite can match tag keys escaped with quotes, the rxdb event-reduce query matcher (mingo) says that a document like
+// {
+//     'tags': 'a': {...}}
+// }
+// does not match the query:
+// {"tags.\"a\"":{"$exists":1}}
+//
+// What this function does is "fix" the sqlite queries to unescape the tag keys (basically, remove the quotes).
+// so that the event reduce library can work properly and not remove tagged documents from results.
+function unescapeTagKeysInSelector(query: any): any {
+    if (typeof query === 'object' && query !== null) {
+        // loop through all keys of the object
+        for (const key in query) {
+            // eslint-disable-next-line no-prototype-builtins
+            if (query.hasOwnProperty(key)) {
+                // check if key matches the pattern "tags.\"x\""
+                if (key.startsWith('tags.') && key.includes('"')) {
+                    const newKey = key.replace(/\\"/g, '');
+                    // reassign the value to the new key
+                    query[newKey] = query[key];
+                    // delete the old key
+                    delete query[key];
+                }
+                // if value is an object, apply the function recursively
+                if (typeof query[key] === 'object') {
+                    query[key] = unescapeTagKeysInSelector(query[key]);
+                }
+            }
+        }
+    }
+    return query;
+}
+
 
 /**
  * Returns a function
@@ -224,7 +260,8 @@ export function getQueryMatcher<RxDocType>(
         throw newRxError('SNH', { query });
     }
 
-    const mingoQuery = getMingoQuery(query.selector as any);
+    const mingoQuery = getMingoQuery(unescapeTagKeysInSelector(query.selector as any));
+
     const fun: QueryMatcher<RxDocumentData<RxDocType>> = (doc: RxDocumentData<RxDocType> | DeepReadonly<RxDocumentData<RxDocType>>) => {
         return mingoQuery.test(doc);
     };
