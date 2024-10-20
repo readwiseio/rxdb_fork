@@ -181,6 +181,39 @@ function getSortComparator(schema, query) {
   return fun;
 }
 
+// When the rxdb adapter is sqlite, we escape tag names by wrapping them in quotes:
+//  https://github.com/TristanH/rekindled/blob/e42d2fa40305ba98dfab12e8dd7aed07ddb17ebf/reading-clients/shared/database/queryHelpers.ts#L18
+//
+// Although sqlite can match tag keys escaped with quotes, the rxdb event-reduce query matcher (mingo) says that a document like
+// {
+//     'tags': 'a': {...}}
+// }
+// does not match the query:
+// {"tags.\"a\"":{"$exists":1}}
+//
+// What this function does is "fix" the sqlite queries to unescape the tag keys (basically, remove the quotes).
+// so that the event reduce library can work properly and not remove tagged documents from results.
+function unescapeTagKeysInSelector(query) {
+  if (typeof query === 'object' && query !== null) {
+    var newQuery = Array.isArray(query) ? [] : {};
+    // loop through all keys of the object
+    for (var key in query) {
+      // eslint-disable-next-line no-prototype-builtins
+      if (query.hasOwnProperty(key)) {
+        // check if key matches the pattern "tags.\"x\""
+        var newKey = key;
+        if (key.startsWith('tags.') && key.includes('"')) {
+          newKey = key.replace(/"/g, '');
+        }
+        // recursively process the value
+        newQuery[newKey] = unescapeTagKeysInSelector(query[key]);
+      }
+    }
+    return newQuery;
+  }
+  return query;
+}
+
 /**
  * Returns a function
  * that can be used to check if a document
@@ -192,7 +225,7 @@ function getQueryMatcher(_schema, query) {
       query
     });
   }
-  var mingoQuery = (0, _rxQueryMingo.getMingoQuery)(query.selector);
+  var mingoQuery = (0, _rxQueryMingo.getMingoQuery)(unescapeTagKeysInSelector(query.selector));
   var fun = doc => {
     return mingoQuery.test(doc);
   };
