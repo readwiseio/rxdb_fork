@@ -239,7 +239,7 @@ var RxWebRTCReplicationPool = exports.RxWebRTCReplicationPool = /*#__PURE__*/fun
   }
 
   // often used in unit tests
-  ;
+;
   _proto.awaitFirstPeer = function awaitFirstPeer() {
     return (0, _rxjs.firstValueFrom)(this.peerStates$.pipe((0, _rxjs.filter)(peerStates => peerStates.size > 0)));
   };

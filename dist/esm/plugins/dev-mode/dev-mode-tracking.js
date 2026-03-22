@@ -32,6 +32,6 @@ export async function addDevModeTrackingIframe(db) {
 }
 function isLocalHost() {
   return location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname === '0.0.0.0' || location.hostname === '[::1]' // IPv6
-  ;
+;
 }
 //# sourceMappingURL=dev-mode-tracking.js.map

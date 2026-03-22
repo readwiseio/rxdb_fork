@@ -295,7 +295,7 @@ export var RxQueryBase = /*#__PURE__*/function () {
 
   // we only set some methods of query-builder here
   // because the others depend on these ones
-  ;
+;
   _proto.where = function where(_queryObj) {
     throw pluginMissing('query-builder');
   };
