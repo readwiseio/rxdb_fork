@@ -18,10 +18,21 @@ var _index = require("../utils/index.js");
 async function getOldCollectionMeta(migrationState) {
   var collectionDocKeys = (0, _rxSchema.getPreviousVersions)(migrationState.collection.schema.jsonSchema).map(version => migrationState.collection.name + '-' + version);
   var found = await migrationState.database.internalStore.findDocumentsById(collectionDocKeys.map(key => (0, _rxDatabaseInternalStore.getPrimaryKeyOfInternalDocument)(key, _rxDatabaseInternalStore.INTERNAL_CONTEXT_COLLECTION)), false);
-  if (found.length > 1) {
-    throw new Error('more than one old collection meta found');
+
+  // If multiple old collection meta entries exist (e.g. from an interrupted migration),
+  // use the oldest one so all migration strategies run in sequence.
+  // Upstream fix: https://github.com/pubkey/rxdb/blob/master/src/plugins/migration-schema/migration-helpers.ts
+  if (found.length === 0) {
+    return found[0]; // undefined — mustMigrate() handles this
   }
-  return found[0];
+  if (found.length === 1) {
+    return found[0];
+  }
+  var foundById = {};
+  found.forEach(f => foundById[f.key] = f);
+  // collectionDocKeys is ordered oldest-first, so .find() returns the oldest match
+  var oldest = collectionDocKeys.find(key => foundById[key]);
+  return foundById[oldest];
 }
 
 /**

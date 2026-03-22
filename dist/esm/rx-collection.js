@@ -142,7 +142,7 @@ export var RxCollectionBase = /*#__PURE__*/function () {
   }
 
   // overwritten by migration-plugin
-  ;
+;
   _proto.migrationNeeded = function migrationNeeded() {
     throw pluginMissing('migration-schema');
   };

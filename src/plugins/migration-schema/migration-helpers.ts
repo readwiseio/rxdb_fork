@@ -34,10 +34,21 @@ export async function getOldCollectionMeta(
         )),
         false
     );
-    if (found.length > 1) {
-        throw new Error('more than one old collection meta found');
+
+    // If multiple old collection meta entries exist (e.g. from an interrupted migration),
+    // use the oldest one so all migration strategies run in sequence.
+    // Upstream fix: https://github.com/pubkey/rxdb/blob/master/src/plugins/migration-schema/migration-helpers.ts
+    if (found.length === 0) {
+        return found[0]; // undefined — mustMigrate() handles this
     }
-    return found[0];
+    if (found.length === 1) {
+        return found[0];
+    }
+    const foundById: Record<string, RxDocumentData<InternalStoreCollectionDocType>> = {};
+    found.forEach(f => foundById[f.key] = f);
+    // collectionDocKeys is ordered oldest-first, so .find() returns the oldest match
+    const oldest = collectionDocKeys.find(key => foundById[key])!;
+    return foundById[oldest];
 }
 
 
