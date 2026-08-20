@@ -206,12 +206,15 @@ export async function startReplicationDownstream(state) {
           if (!isAssumedMasterEqualToForkState && assumedMaster && assumedMaster.docData._rev && forkStateFullDoc && forkStateFullDoc._meta[state.input.identifier] && getHeightOfRevision(forkStateFullDoc._rev) === forkStateFullDoc._meta[state.input.identifier]) {
             isAssumedMasterEqualToForkState = true;
           }
-          if (forkStateFullDoc && assumedMaster && isAssumedMasterEqualToForkState === false || forkStateFullDoc && !assumedMaster) {
+          if ((forkStateFullDoc && assumedMaster && isAssumedMasterEqualToForkState === false || forkStateFullDoc && !assumedMaster) && !(forkStateFullDoc._meta.o && forkStateFullDoc._meta.o.hash === identifierHash && forkStateFullDoc._meta.o._rev === getHeightOfRevision(forkStateFullDoc._rev))) {
             /**
              * We have a non-upstream-replicated
              * local write to the fork.
-             * This means we ignore the downstream of this document
-             * because anyway the upstream will first resolve the conflict.
+             * This means either we have to upstream the local
+             * doc data first, or it means that the fork state was
+             * synced from the master but the process exited before
+             * the metadata was written.
+             * @link https://github.com/pubkey/rxdb/pull/7804
              */
             return PROMISE_RESOLVE_VOID;
           }
@@ -267,6 +270,17 @@ export async function startReplicationDownstream(state) {
           if (state.input.keepMeta && masterState._meta) {
             newForkState._meta = masterState._meta;
           }
+
+          /**
+           * Tag the write with its origin so a later downstream run can tell
+           * "fork differs from assumed master" caused by a local write apart
+           * from one caused by a lost meta write. A local write bumps the
+           * revision height and voids the marker.
+           */
+          newForkState._meta.o = {
+            _rev: !forkStateFullDoc ? 1 : getHeightOfRevision(forkStateFullDoc._rev) + 1,
+            hash: identifierHash
+          };
           var forkWriteRow = {
             previous: forkStateFullDoc,
             document: newForkState
