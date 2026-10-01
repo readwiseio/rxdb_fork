@@ -935,6 +935,166 @@ describe('replication.test.ts', () => {
         });
     });
     describeParallel('issues', () => {
+        /**
+         * @link https://github.com/pubkey/rxdb/pull/7804
+         */
+        function setupDownstreamTestReplication(
+            local: RxCollection<TestDocType>,
+            remote: RxCollection<TestDocType>
+        ) {
+            return replicateRxCollection<TestDocType, any>({
+                collection: local,
+                replicationIdentifier: 'downstream-test',
+                live: true,
+                pull: {
+                    handler: getPullHandler(remote),
+                    stream$: getPullStream(remote)
+                },
+                push: {
+                    handler: getPushHandler(remote)
+                }
+            });
+        }
+
+        /**
+         * Simulates a crash between fork write and meta write in downstream.
+         *
+         * When the process dies after forkInstance.bulkWrite() succeeds but before
+         * metaInstance.bulkWrite() completes, the fork has the new state but the
+         * assumed master in meta is stale. On the next downstream cycle, this
+         * mismatch is detected as a "non-upstream-replicated local write" and the
+         * document is skipped - expecting upstream to resolve the conflict. But
+         * upstream never picks it up because the fork write came from downstream,
+         * leaving the document permanently stuck.
+         */
+        it('#7804 (1/2) should recover downstream sync after meta write is lost between fork and meta write (simulated crash)', async () => {
+            const { localCollection, remoteCollection } = await getTestCollections({ local: 0, remote: 0 });
+            const docId = 'crash-test-doc';
+
+            // Insert initial document on remote
+            await remoteCollection.insert(schemaObjects.humanWithTimestampData({
+                id: docId,
+                name: 'Initial',
+                age: 1
+            }));
+
+            // Start replication and let it sync the initial document
+            const replicationState = setupDownstreamTestReplication(localCollection, remoteCollection);
+            ensureReplicationHasNoErrors(replicationState);
+            await replicationState.awaitInitialReplication();
+
+            // Verify initial sync
+            const initialLocal = await localCollection.findOne(docId).exec(true);
+            assert.strictEqual(initialLocal.name, 'Initial');
+
+            // Monkey-patch metaInstance.bulkWrite to silently drop the next
+            // downstream meta write - simulating a crash between fork and meta write.
+            const metaInstance = ensureNotFalsy(replicationState.internalReplicationState).input.metaInstance;
+            const originalBulkWrite = metaInstance.bulkWrite.bind(metaInstance);
+            let metaWriteDropped = false;
+
+            metaInstance.bulkWrite = function (rows: any[], context: string) {
+                if (context === 'replication-down-write-meta' && !metaWriteDropped) {
+                    metaWriteDropped = true;
+                    // Silently swallow the write: fork already persisted, meta is lost.
+                    return Promise.resolve({ success: [], error: [] });
+                }
+                return originalBulkWrite(rows, context);
+            } as any;
+
+            // Update the document on remote.
+            // Downstream will write the new state to the fork, but the
+            // corresponding meta write is silently dropped above.
+            const remoteDoc = await remoteCollection.findOne(docId).exec(true);
+            const internalState = ensureNotFalsy(replicationState.internalReplicationState);
+            let prevDown = internalState.streamQueue.down;
+            await remoteDoc.incrementalPatch({
+                name: 'FirstUpdate',
+                age: 2
+            });
+
+            // Wait for the downstream cycle to finish
+            await waitUntil(() => internalState.streamQueue.down !== prevDown, undefined, 40);
+            await internalState.streamQueue.down;
+
+            assert.ok(metaWriteDropped, 'Meta write should have been intercepted and dropped');
+            const afterFirst = await localCollection.findOne(docId).exec(true);
+            assert.strictEqual(afterFirst.name, 'FirstUpdate');
+
+            // Restore original bulkWrite so meta works normally again.
+            metaInstance.bulkWrite = originalBulkWrite;
+
+            // At this point the replication state is:
+            //   forkState       = { name: 'FirstUpdate', age: 2 }
+            //   assumedMaster   = { name: 'Initial', age: 1 }      (stale - meta write was lost)
+            //
+            // Without the origin marker, downstream sees forkState != assumedMaster
+            // and treats it as a "non-upstream-replicated local write", skipping the document.
+
+            // Update the document on remote again.
+            prevDown = internalState.streamQueue.down;
+            const remoteDoc2 = await remoteCollection.findOne(docId).exec(true);
+            await remoteDoc2.incrementalPatch({
+                name: 'SecondUpdate',
+                age: 3
+            });
+
+            // Wait for downstream to finish processing, then verify it recovered.
+            await waitUntil(() => internalState.streamQueue.down !== prevDown, undefined, 40);
+            await internalState.streamQueue.down;
+
+            const localDoc = await localCollection.findOne(docId).exec(true);
+            assert.strictEqual(localDoc.name, 'SecondUpdate', 'should have replicated the second update from the remote');
+            assert.strictEqual(localDoc.age, 3);
+
+            await replicationState.cancel();
+            await localCollection.database.destroy();
+            await remoteCollection.database.destroy();
+        });
+        it('#7804 (2/2) should sync downstream updates when local and remote have different documents', async () => {
+            const { localCollection, remoteCollection } = await getTestCollections({ local: 0, remote: 0 });
+            const docId = 'different-doc';
+
+            // Insert different documents in each
+            await remoteCollection.insert(schemaObjects.humanWithTimestampData({
+                id: docId,
+                name: 'RemoteDocument',
+                age: 10
+            }));
+            await localCollection.insert(schemaObjects.humanWithTimestampData({
+                id: docId,
+                name: 'LocalDocument',
+                age: 20
+            }));
+
+            const replicationState = setupDownstreamTestReplication(localCollection, remoteCollection);
+            ensureReplicationHasNoErrors(replicationState);
+
+            await replicationState.awaitInitialReplication();
+            await replicationState.awaitInSync();
+
+            // Update document on remote
+            const internalState = ensureNotFalsy(replicationState.internalReplicationState);
+            const prevDown = internalState.streamQueue.down;
+            const remoteDoc = await remoteCollection.findOne(docId).exec(true);
+            await remoteDoc.incrementalPatch({
+                name: 'UpdatedFromRemote',
+                age: 999
+            });
+
+            // Wait for downstream cycle to complete
+            await waitUntil(() => internalState.streamQueue.down !== prevDown, 1000, 10);
+            await internalState.streamQueue.down;
+
+            // Verify local received the update
+            const localDoc = await localCollection.findOne(docId).exec(true);
+            assert.strictEqual(localDoc.name, 'UpdatedFromRemote');
+            assert.strictEqual(localDoc.age, 999);
+
+            await replicationState.cancel();
+            await localCollection.database.destroy();
+            await remoteCollection.database.destroy();
+        });
         it('#4190 Composite Primary Keys broken on replicated collections', async () => {
             const db = await createRxDatabase({
                 name: randomCouchString(10),
