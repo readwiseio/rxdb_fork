@@ -158,11 +158,11 @@ var RxCollectionBase = exports.RxCollectionBase = /*#__PURE__*/function () {
   _proto.getMigrationState = function getMigrationState() {
     throw (0, _index.pluginMissing)('migration-schema');
   };
-  _proto.startMigration = function startMigration(batchSize = 10) {
+  _proto.startMigration = function startMigration(batchSize = 100) {
     (0, _rxCollectionHelper.ensureRxCollectionIsNotDestroyed)(this);
     return this.getMigrationState().startMigration(batchSize);
   };
-  _proto.migratePromise = function migratePromise(batchSize = 10) {
+  _proto.migratePromise = function migratePromise(batchSize = 100) {
     return this.getMigrationState().migratePromise(batchSize);
   };
   _proto.insert = async function insert(json) {

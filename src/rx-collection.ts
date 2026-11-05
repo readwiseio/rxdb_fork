@@ -327,11 +327,11 @@ export class RxCollectionBase<
     getMigrationState(): RxMigrationState {
         throw pluginMissing('migration-schema');
     }
-    startMigration(batchSize: number = 10): Promise<void> {
+    startMigration(batchSize: number = 100): Promise<void> {
         ensureRxCollectionIsNotDestroyed(this);
         return this.getMigrationState().startMigration(batchSize);
     }
-    migratePromise(batchSize: number = 10): Promise<any> {
+    migratePromise(batchSize: number = 100): Promise<any> {
         return this.getMigrationState().migratePromise(batchSize);
     }
 
